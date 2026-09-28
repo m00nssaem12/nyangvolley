@@ -95,6 +95,16 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
 @media (max-width:520px){#hud-menu{font-size:12px;padding:2px 8px;top:4px}}
 .seg button{white-space:nowrap}
 @media (max-width:440px){.seg button{font-size:13px;padding:6px 1px}.sw{gap:3px}.sw button{width:23px;height:23px;border-width:2px}.opt{grid-template-columns:auto 1fr;gap:7px 6px}.opt>span{white-space:nowrap;font-size:13px}}
+/* 전자칠판 모드 */
+body.board{touch-action:none;overscroll-behavior:none}
+body.board #touch{position:fixed;left:0;right:0;bottom:0;top:0;pointer-events:none;display:flex;justify-content:space-between;align-items:flex-end;padding:0 1.2vw 3vh;width:auto!important;z-index:5;gap:0}
+.bpad{pointer-events:auto;width:var(--bw);display:flex;flex-direction:column;align-items:center;gap:calc(var(--bw)*.05)}
+.bpad.R{margin-left:auto}
+.bname{font-size:calc(var(--bw)*.12);color:#fff;background:var(--pc);border-radius:14px;padding:2px 16px;border:3px solid #fff;text-shadow:0 1px 3px rgba(0,0,0,.55);box-shadow:0 3px 0 rgba(0,0,0,.2);max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bgrid{display:grid;grid-template-columns:repeat(3,1fr);grid-template-areas:". u ." "l d r" "h h h";gap:calc(var(--bw)*.05);width:100%}
+.bgrid .tb{width:100%;height:auto;aspect-ratio:1;border-radius:24%;font-size:calc(var(--bw)*.13);border:4px solid var(--pc);box-shadow:0 5px 0 rgba(0,0,0,.28)}
+.bgrid .tb.hit{grid-area:h;aspect-ratio:auto;width:100%;height:calc(var(--bw)*.36);border-radius:20px;font-size:calc(var(--bw)*.15);border-color:#fff}
+.bgrid .bup{grid-area:u}.bgrid .bleft{grid-area:l}.bgrid .bright{grid-area:r}.bgrid .bdown{grid-area:d}
 </style>
 </head>
 <body>
@@ -110,6 +120,7 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
 <div class="screen show" id="scr-menu"><div class="card">
   <div class="logo">냥냥 <span>배구</span></div>
   <div class="sub">해변에서 펼쳐지는 1:1 고양이 배구!</div>
+  <button class="btn" data-act="cont" id="btn-continue" style="display:none;background:#ffd66b;box-shadow:0 5px 0 #d9a92b"></button>
   <button class="btn" data-act="cpu">🤖 컴퓨터와 대전</button>
   <button class="btn blue" data-act="local">👥 둘이서 (한 기기)</button>
   <button class="btn green" data-act="online">🌐 온라인 대전</button>
@@ -124,6 +135,7 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
     <div class="seg" data-set="cpu"><button data-v="veasy">아주 쉬움</button><button data-v="easy">쉬움</button><button data-v="normal">보통</button><button data-v="hard">어려움</button></div>
   </div>
   <div class="row"><button class="btn gray" data-act="help">🎮 조작법</button><button class="btn gray" data-act="sound" id="btn-sound">🔊 소리 켜짐</button></div>
+  <button class="btn gray" data-act="board" id="btn-board">🖥 전자칠판 모드: 꺼짐</button>
   <div class="foot">made by m00n</div>
 </div></div>
 
@@ -200,7 +212,8 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
   <div class="big" id="over-title"></div>
   <div class="score" id="over-score"></div>
   <div class="note" id="over-note"></div>
-  <button class="btn" data-act="again" id="btn-again">다시하기</button>
+  <div class="note" id="over-series"></div>
+  <button class="btn" data-act="again" id="btn-again">🔁 같은 설정으로 한 판 더</button>
   <button class="btn gray" data-act="quit" id="btn-over-quit">메뉴로</button>
 </div></div>
 
@@ -236,6 +249,13 @@ const B_R = 20, B_GROUND = 252;             // 공 반지름, 공 바닥 y
 const NET_HALF = 25, NET_TOP = 176, NET_TOP_BOTTOM = 192;
 const PHASES = ['ready', 'play', 'point', 'over'];
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+// 온라인에서 두 기기 계산이 똑같도록: 난수는 게임 상태 안의 씨앗으로 만든다
+function rnd(G) {
+  let t = (G.seed = (G.seed + 0x6D2B79F5) | 0);
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
 
 function newPlayer(side) {
   const x = side === 0 ? 36 : 396;
@@ -246,8 +266,8 @@ function newBall(server) {
   const x = server === 0 ? 56 : 376;
   return { x, y: 0, xv: 0, yv: 0, rot: 0, power: false, px: x, py: 0, prot: 0 };
 }
-function newGame(winScore, rate) {
-  return { players: [newPlayer(0), newPlayer(1)], ball: newBall(0), score: [0, 0],
+function newGame(winScore, rate, seed) {
+  return { seed: (seed | 0) || 12345, players: [newPlayer(0), newPlayer(1)], ball: newBall(0), score: [0, 0],
            server: 0, lastScorer: -1, winner: -1, phase: 'ready', timer: Math.round(rate * 1.3),
            winScore, rate, tick: 0,
            fx: { hit: 0, power: 0, point: 0, whistle: 0, win: 0, px: 0, py: 0 } };
@@ -334,7 +354,7 @@ function collide(G, p, b, inp) {
   p.colliding = true;
   if (!inside) { b.x = at.bx; b.y = at.by; }
   b.xv = Math.trunc((b.x - p.x) / 3);
-  if (b.xv === 0) b.xv = Math.floor(Math.random() * 3) - 1;
+  if (b.xv === 0) b.xv = Math.floor(rnd(G) * 3) - 1;
   b.yv = -Math.max(Math.abs(b.yv), 15);
   if (b.yv > p.yv - 8) b.yv = p.yv - 8;       // 점프로 올라가는 몸보다 공이 확실히 빨리 떠나게 (몸에 박힘 방지)
   const dy = b.y - p.y;
@@ -503,24 +523,123 @@ function aiInput(ai, G) {
 }
 // @@LOGIC_END
 
-/* ================= 온라인용 인코딩 ================= */
-function encode(G) {
-  const [a, c] = G.players, b = G.ball, f = G.fx, r = v => Math.round(v * 10) / 10;
-  return [G.tick, PHASES.indexOf(G.phase), G.score[0], G.score[1], G.winner, G.server, G.lastScorer,
-    G.timer, G.winScore, G.rate,
-    r(b.x), r(b.y), Math.round(b.rot * 100) / 100, b.power ? 1 : 0,
-    r(a.x), r(a.y), a.state, a.diveDir, r(c.x), r(c.y), c.state, c.diveDir,
-    f.hit, f.power, f.point, f.whistle, f.win, r(f.px), r(f.py)];
+// @@NET_START
+/* ================= 온라인: 롤백 방식 =================
+   두 기기가 똑같은 게임을 각자 계산하고, 서로 '키 입력'만 주고받는다.
+   - 내 입력은 몇 프레임 뒤에 적용된다 (두 사람 모두 똑같이) → 한쪽만 유리하지 않음
+   - 상대 입력이 아직 안 왔으면 직전 입력으로 예측해서 진행하고,
+     실제 입력이 도착했는데 예측과 다르면 그 프레임으로 되감아 다시 계산한다
+   - 서로 진행 프레임을 비교해서 앞선 쪽이 조금 천천히 → 두 기기가 같은 속도로 진행
+   - 2초마다 방장 상태와 비교해서 어긋났으면 방장 상태로 자동 보정 */
+const IDLE_C = 8;                                                   // 아무 키도 안 누름
+const encIn = i => (i.x + 1) * 6 + (i.y + 1) * 2 + (i.hit ? 1 : 0);
+const decIn = c => ({ x: Math.floor(c / 6) - 1, y: Math.floor((c % 6) / 2) - 1, hit: (c & 1) === 1 });
+
+function createRollback(match, me, send, sendSync) {
+  const rb = {
+    me, rem: 1 - me, mid: match.id, G: newGame(match.len, match.rate, match.seed),
+    frame: 0, delay: match.delay, maxRoll: match.maxRoll, step: 1000 / match.rate,
+    inp: [[], []], used: [], snaps: [], upTo: match.delay - 1, rollFrom: Infinity, acc: 0,
+    peerAck: match.delay - 1, remF: 0, remT: -1, rtt: 0, lastPeerT: 0, lastPeerRecv: 0, lastSend: -1e9,
+    stallMs: 0, syncEvery: match.rate * 2, nextSync: match.rate * 2, mySync: {}, hostSync: {},
+    fixes: 0, rolls: 0, cleanS: 0, cleanI: 0
+  };
+  for (let f = 0; f < rb.delay; f++) { rb.inp[0][f] = IDLE_C; rb.inp[1][f] = IDLE_C; }
+
+  function get(p, f) {
+    const c = rb.inp[p][f];
+    if (c !== undefined) return c;
+    return rb.inp[p][rb.upTo] & ~1;        // 예측: 마지막으로 받은 입력 유지 (치기·차기는 반복 안 함)
+  }
+  function sim(f) {
+    rb.snaps[f] = JSON.stringify(rb.G);
+    const a = get(0, f), c = get(1, f);
+    rb.used[f] = rb.rem === 0 ? a : c;
+    tick(rb.G, [decIn(a), decIn(c)]);
+  }
+  function resimFrom(f0) { for (let f = f0; f < rb.frame; f++) sim(f); }
+  function compare(F) {
+    const a = rb.mySync[F], h = rb.hostSync[F];
+    if (a === undefined || h === undefined) return;
+    delete rb.mySync[F]; delete rb.hostSync[F];
+    if (a === h) return;
+    rb.fixes++;                            // 계산이 어긋남 → 방장 상태로 맞추고 지금까지 다시 계산
+    rb.G = JSON.parse(h); resimFrom(F);
+  }
+
+  rb.receive = (m, now) => {
+    if (!m || m.m !== rb.mid) return;
+    const d = typeof m.d === 'string' ? m.d : '';
+    for (let i = 0; i < d.length; i++) {
+      const f = m.s + i;
+      if (f <= rb.upTo || rb.inp[rb.rem][f] !== undefined) continue;
+      const c = d.charCodeAt(i) - 65;
+      if (!(c >= 0 && c < 18)) continue;
+      rb.inp[rb.rem][f] = c;
+      if (f < rb.frame && rb.used[f] !== c) rb.rollFrom = Math.min(rb.rollFrom, f);
+    }
+    while (rb.inp[rb.rem][rb.upTo + 1] !== undefined) rb.upTo++;
+    if (m.a > rb.peerAck) rb.peerAck = m.a;
+    if (m.f >= rb.remF) { rb.remF = m.f; rb.remT = now; }
+    rb.lastPeerT = m.t; rb.lastPeerRecv = now;
+    if (m.e > 0) { const s = now - m.e; if (s >= 0 && s < 5000) rb.rtt = rb.rtt ? rb.rtt * 0.8 + s * 0.2 : s; }
+  };
+  rb.receiveSync = m => {
+    if (!m || m.m !== rb.mid || typeof m.s !== 'string') return;
+    rb.hostSync[m.f] = m.s; compare(m.f);
+  };
+
+  rb.update = (dt, now, sample) => {
+    // 1) 늦게 온 상대 입력이 예측과 달랐으면 되감아서 다시 계산
+    if (rb.rollFrom < rb.frame && rb.snaps[rb.rollFrom] !== undefined) {
+      rb.G = JSON.parse(rb.snaps[rb.rollFrom]); resimFrom(rb.rollFrom); rb.rolls++;
+    }
+    rb.rollFrom = Infinity;
+    // 2) 두 기기 진행 속도 맞추기
+    let k = 1;
+    if (rb.remT >= 0) {
+      const est = rb.remF + (now - rb.remT + rb.rtt / 2) / rb.step, adv = rb.frame - est;
+      k = adv < -6 ? 2 : 1 - clamp(adv * 0.03, -0.25, 0.12);
+    }
+    rb.acc += dt * k;
+    let n = 0;
+    while (rb.acc >= rb.step && n < 8) {
+      if (rb.frame - rb.upTo > rb.maxRoll) { rb.acc = rb.step; break; }   // 상대 입력이 너무 늦음 → 잠깐 기다림
+      rb.inp[rb.me][rb.frame + rb.delay] = encIn(sample());
+      sim(rb.frame); rb.frame++; rb.acc -= rb.step; n++;
+    }
+    if (n === 8) rb.acc = Math.min(rb.acc, rb.step);
+    rb.stallMs = rb.frame - rb.upTo > rb.maxRoll ? rb.stallMs + dt : 0;
+    // 3) 확정된 상태를 방장과 비교
+    while (rb.nextSync < rb.frame && rb.nextSync <= rb.upTo + 1) {
+      const F = rb.nextSync, s = rb.snaps[F];
+      if (s !== undefined) {
+        if (rb.me === 0) sendSync({ m: rb.mid, f: F, s });
+        else { rb.mySync[F] = s; compare(F); }
+      }
+      rb.nextSync += rb.syncEvery;
+    }
+    // 4) 오래된 기록 정리
+    for (; rb.cleanS < rb.upTo - 1; rb.cleanS++) { delete rb.snaps[rb.cleanS]; delete rb.used[rb.cleanS]; }
+    const keepI = Math.min(rb.upTo, rb.peerAck) - rb.syncEvery * 3;
+    for (; rb.cleanI < keepI; rb.cleanI++) { delete rb.inp[0][rb.cleanI]; delete rb.inp[1][rb.cleanI]; }
+    for (const key in rb.mySync) if (+key < rb.frame - rb.syncEvery * 5) delete rb.mySync[key];
+    for (const key in rb.hostSync) if (+key < rb.frame - rb.syncEvery * 5) delete rb.hostSync[key];
+    // 5) 내 입력 보내기 (상대가 아직 못 받은 것부터, 여러 번 겹쳐 보내서 빠지는 것 없게)
+    if (now - rb.lastSend >= 40) {
+      rb.lastSend = now;
+      const last = rb.frame + rb.delay - 1, s = Math.max(rb.peerAck + 1, last - 599, rb.cleanI);
+      let d = '';
+      for (let f = s; f <= last; f++) { const c = rb.inp[rb.me][f]; if (c === undefined) break; d += String.fromCharCode(65 + c); }
+      send({ m: rb.mid, s, d, f: rb.frame, a: rb.upTo, t: Math.round(now),
+             e: rb.lastPeerRecv ? Math.round(rb.lastPeerT + (now - rb.lastPeerRecv)) : 0 });
+    }
+  };
+  return rb;
 }
-function decode(A) {
-  let i = 0; const n = () => A[i++];
-  const v = { tick: n(), phase: PHASES[n()], score: [n(), n()], winner: n(), server: n(), lastScorer: n(),
-              timer: n(), winScore: n(), rate: n() };
-  v.b = { x: n(), y: n(), rot: n(), power: !!n() };
-  v.p = [{ x: n(), y: n(), state: n(), diveDir: n(), side: 0 }, { x: n(), y: n(), state: n(), diveDir: n(), side: 1 }];
-  v.fx = { hit: n(), power: n(), point: n(), whistle: n(), win: n(), px: n(), py: n() };
-  return v;
-}
+// @@NET_END
+
+/* ================= 화면용 보간 ================= */
 function viewFromGame(G, a) {
   const L = (x, y) => x + (y - x) * a, b = G.ball;
   return {
@@ -529,15 +648,6 @@ function viewFromGame(G, a) {
     score: G.score, phase: G.phase, timer: G.timer, winner: G.winner, server: G.server,
     lastScorer: G.lastScorer, winScore: G.winScore, rate: G.rate, fx: G.fx
   };
-}
-function lerpView(a, b, k) {
-  const L = (x, y) => Math.abs(y - x) > 80 ? y : x + (y - x) * k;
-  const base = k < 0.5 ? a : b;
-  const v = Object.assign({}, base);
-  v.fx = a.fx;
-  v.b = { x: L(a.b.x, b.b.x), y: L(a.b.y, b.b.y), rot: a.b.rot + (b.b.rot - a.b.rot) * k, power: base.b.power };
-  v.p = a.p.map((p, i) => Object.assign({}, base.p[i], { x: L(p.x, b.p[i].x), y: L(p.y, b.p[i].y) }));
-  return v;
 }
 
 /* ================= 설정 ================= */
@@ -549,6 +659,7 @@ const Settings = (() => {
 function saveSettings() { try { localStorage.setItem('nyangVolley', JSON.stringify(Settings)); } catch (e) {} }
 const RATES = { slow: 20, normal: 25, fast: 30 };
 const SPEED_NAME = { slow: '느림', normal: '보통', fast: '빠름' };
+const newSeed = () => (Math.random() * 2147483647) | 0;
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -637,30 +748,71 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+const touchUI = () => isTouch || !!Settings.board;     // 전자칠판 모드면 터치 버튼을 항상 보여줌
 function buildTouch(kind) {
   const el = $('#touch'); el.innerHTML = '';
-  pads[0] = {}; pads[1] = {};
-  if (kind === 'none' || !isTouch) { el.style.display = 'none'; layout(); return; }
+  ptrs.clear(); pads[0] = {}; pads[1] = {};
+  const board = !!Settings.board && kind !== 'none';
+  document.body.classList.toggle('board', board);
+  if (kind === 'none' || !touchUI()) { el.style.display = 'none'; layout(); return; }
   el.style.display = 'flex';
-  if (kind === 'single') el.append(mkGroup(0, ['left', 'right'], false), mkGroup(0, ['down', 'up', 'hit'], false));
+  if (board) {
+    if (kind === 'dual') el.append(mkBoardPad(0, 0), mkBoardPad(1, 1));
+    else el.append(mkBoardPad(0, mode === 'guest' ? 1 : 0));      // 1인: 내 쪽에만
+  } else if (kind === 'single') el.append(mkGroup(0, ['left', 'right'], false), mkGroup(0, ['down', 'up', 'hit'], false));
   else el.append(mkGroup(0, ['left', 'right', 'up', 'down', 'hit'], true), mkGroup(1, ['hit', 'down', 'up', 'left', 'right'], true));
   layout();
 }
+const BTN_LABEL = { left: '◀', right: '▶', up: '▲', down: '▼', hit: '치기' };
+function mkBtn(pi, k, extra) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'tb' + (k === 'hit' ? ' hit' : '') + (extra || '');
+  b.dataset.pi = pi; b.dataset.k = k; b.textContent = BTN_LABEL[k];
+  return b;
+}
 function mkGroup(pi, list, compact) {
   const g = document.createElement('div'); g.className = 'pad' + (compact ? ' compact' : '');
-  const label = { left: '◀', right: '▶', up: '▲', down: '▼', hit: '치기' };
-  for (const k of list) {
-    const b = document.createElement('button');
-    b.className = 'tb' + (k === 'hit' ? ' hit' : ''); b.textContent = label[k];
-    const on = e => { e.preventDefault(); Sound.get(); pads[pi][k] = true; if (k === 'hit') pads[pi].hitEdge = true; b.classList.add('on'); try { b.setPointerCapture(e.pointerId); } catch (_) {} };
-    const off = () => { pads[pi][k] = false; b.classList.remove('on'); };
-    b.addEventListener('pointerdown', on);
-    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => b.addEventListener(ev, off));
-    b.addEventListener('contextmenu', e => e.preventDefault());
-    g.append(b);
-  }
+  for (const k of list) g.append(mkBtn(pi, k));
   return g;
 }
+// 전자칠판용 큰 패드: side 0 = 왼쪽 선수, 1 = 오른쪽 선수
+function mkBoardPad(pi, side) {
+  const g = document.createElement('div'); g.className = 'bpad ' + (side ? 'R' : 'L');
+  g.style.setProperty('--pc', skinOf(side).main);
+  const nm = document.createElement('div'); nm.className = 'bname'; nm.textContent = String(Names[side] || '').replace(' (컴퓨터)', '');
+  const grid = document.createElement('div'); grid.className = 'bgrid';
+  for (const k of ['up', 'left', 'down', 'right', 'hit']) grid.append(mkBtn(pi, k, ' b' + k));
+  g.append(nm, grid); return g;
+}
+// 여러 손가락 동시 입력 + 손가락을 떼지 않고 옆 버튼으로 미끄러져도 인식
+const ptrs = new Map();
+function syncPads() {
+  for (const pi of [0, 1]) for (const k of ['left', 'right', 'up', 'down', 'hit']) pads[pi][k] = false;
+  document.querySelectorAll('#touch .tb.on').forEach(b => b.classList.remove('on'));
+  for (const v of ptrs.values()) { pads[v.pi][v.k] = true; v.el.classList.add('on'); }
+}
+function ptrTo(id, el) {
+  const cur = ptrs.get(id);
+  if (el && cur && +el.dataset.pi !== cur.pi) el = null;            // 다른 사람 버튼으로 넘어가면 뗀 것으로
+  if (cur && cur.el === el) return;
+  if (el) {
+    const pi = +el.dataset.pi, k = el.dataset.k;
+    if (k === 'hit') pads[pi].hitEdge = true;
+    ptrs.set(id, { pi, k, el });
+  } else ptrs.delete(id);
+  syncPads();
+}
+const tbAt = (x, y) => { const e = document.elementFromPoint(x, y); return e && e.closest ? e.closest('#touch .tb') : null; };
+$('#touch').addEventListener('pointerdown', e => {
+  const b = e.target.closest('.tb'); if (!b) return;
+  e.preventDefault(); Sound.get();
+  try { b.releasePointerCapture(e.pointerId); } catch (_) {}
+  ptrTo(e.pointerId, b);
+});
+addEventListener('pointermove', e => { if (ptrs.has(e.pointerId)) ptrTo(e.pointerId, tbAt(e.clientX, e.clientY)); });
+['pointerup', 'pointercancel'].forEach(ev => addEventListener(ev, e => { if (ptrs.has(e.pointerId)) ptrTo(e.pointerId, null); }));
+addEventListener('blur', () => { ptrs.clear(); syncPads(); });
+$('#touch').addEventListener('contextmenu', e => e.preventDefault());
 
 /* ================= 화면/레이아웃 ================= */
 const stage = $('#stage'), cv = $('#cv'), ctx = cv.getContext('2d');
@@ -668,10 +820,18 @@ let scale = 1, dpr = 1;
 const bgCanvas = document.createElement('canvas');
 function layout() {
   const touchEl = $('#touch');
-  const touchH = touchEl.style.display === 'flex' ? touchEl.offsetHeight + 10 : 0;
-  const w = Math.floor(Math.min(innerWidth - 16, (innerHeight - 16 - touchH) * W / H, 1000));
+  const board = document.body.classList.contains('board') && touchEl.style.display === 'flex';
+  let w;
+  if (board) {                                   // 양옆에 큰 패드 자리를 비우고 가운데에 게임
+    const bw = Math.round(clamp(Math.min(innerWidth * 0.16, innerHeight * 0.3), 130, 320));
+    touchEl.style.setProperty('--bw', bw + 'px');
+    w = Math.floor(Math.min(innerWidth - 2 * (bw + innerWidth * 0.012) - 20, (innerHeight - 16) * W / H, 1500));
+  } else {
+    const touchH = touchEl.style.display === 'flex' ? touchEl.offsetHeight + 10 : 0;
+    w = Math.floor(Math.min(innerWidth - 16, (innerHeight - 16 - touchH) * W / H, 1000));
+    touchEl.style.width = w + 'px';
+  }
   stage.style.width = w + 'px'; stage.style.height = Math.round(w * H / W) + 'px';
-  touchEl.style.width = w + 'px';
   scale = w / W; dpr = Math.min(window.devicePixelRatio || 1, 2);
   cv.width = Math.round(w * dpr); cv.height = Math.round(w * H / W * dpr);
   buildBg();
@@ -947,6 +1107,8 @@ function render(v, now, dt) {
   outlined(String(v.score[1]), W - 14, 24, 34, skinOf(1).hud, skinOf(1).line, 'right');
   outlined(Names[1], W - 14, 50, 13, '#fff', '#1f2a44', 'right');
   if (mode !== 'demo') outlined(`${v.winScore}점 내기`, HALF, 54, 11, '#fff', '#1f2a44');
+  if (inGame() && series[0] + series[1] > 0) outlined(`전적 ${series[0]} : ${series[1]}`, HALF, 68, 10, '#fff', '#1f2a44');
+  if (isOnline() && RB) outlined(`핑 ${Math.round(RB.rtt)}ms${Net.dcOpen ? ' ⚡' : ''}`, HALF, series[0] + series[1] > 0 ? 80 : 68, 9, '#fff', '#1f2a44');
   drawKeyHints();
 
   if (v.phase === 'ready') outlined(`${Names[v.server]} 서브!`, HALF, 112, 22, '#fff', '#1f2a44');
@@ -957,11 +1119,15 @@ function render(v, now, dt) {
     ctx.restore();
   } else if (v.phase === 'over' && v.winner >= 0)
     outlined(`${Names[v.winner]} 승리!`, HALF, 110, 30, '#ffe066', '#1f2a44');
+  if (isOnline() && RB && RB.stallMs > 500) {
+    ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, W, H);
+    outlined('상대 연결을 기다리는 중…', HALF, H / 2, 18, '#fff', '#1f2a44');
+  }
 }
 
 // 화면 아래 조작키 안내 (키보드 사용 시)
 function drawKeyHints() {
-  if (isTouch || !inGame()) return;
+  if (touchUI() || !inGame()) return;
   ctx.save(); ctx.globalAlpha = 0.85;
   const L = 'D·G 이동  R 점프  V 아래  F 아래+앞  Z 치기', Rr = '←→ 이동  ↑ 점프  ↓ 아래  Enter 치기';
   const both = '←→/D·G 이동 · ↑/R 점프 · ↓/V 아래 · Enter/Z 치기';
@@ -977,7 +1143,7 @@ function drawKeyHints() {
 let fxSeen = null;
 function syncFx(fx) {
   if (!fxSeen) { fxSeen = Object.assign({}, fx); return; }
-  const up = key => { if (fx[key] < fxSeen[key]) { fxSeen[key] = fx[key]; return false; } const u = fx[key] > fxSeen[key]; fxSeen[key] = fx[key]; return u; };
+  const up = key => { const u = fx[key] > fxSeen[key]; if (u) fxSeen[key] = fx[key]; return u; };   // 되감기해도 소리가 두 번 나지 않게
   if (up('hit')) Sound.hit();
   if (up('power')) { Sound.power(); spawnBurst(fx.px, fx.py); shake = 7; }
   if (up('point')) { Sound.point(); spawnDust(fx.px); }
@@ -987,36 +1153,49 @@ function syncFx(fx) {
 
 /* ================= 게임 진행 ================= */
 let mode = 'demo', G = null, AIs = [], Names = ['치즈', '블루'], paused = false, overShown = false, acc = 0;
+let RB = null;   // 온라인 롤백 엔진
+const isOnline = () => mode === 'host' || mode === 'guest';
 
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.toggle('show', s.id === 'scr-' + id));
   $('#hud-menu').style.display = inGame() && !id ? 'block' : 'none';
 }
 function startDemo() {
-  mode = 'demo'; paused = false; overShown = false;
-  G = newGame(15, 25); AIs = [makeAI(0, 'hard'), makeAI(1, 'normal')];
+  mode = 'demo'; paused = false; overShown = false; RB = null;
+  G = newGame(15, 25, newSeed()); AIs = [makeAI(0, 'hard'), makeAI(1, 'normal')];
   Skins = Settings.skins.slice(); Names = Skins.map(k => SKINS[k].name);
   Sound.muted = true; fxSeen = null; acc = 0;
   buildTouch('none');
 }
-function startGame(kind) {
-  mode = kind; paused = false; overShown = false;
-  G = newGame(Settings.winScore, RATES[Settings.speed] || 25); acc = 0;
+let series = [0, 0], lastKind = null;   // 연속 경기 전적, 마지막으로 한 모드
+function startGame(kind, cont) {
+  if (!cont || lastKind !== kind) series = [0, 0];
+  lastKind = kind;
+  mode = kind; paused = false; overShown = false; RB = null;
+  G = newGame(Settings.winScore, RATES[Settings.speed] || 25, newSeed()); acc = 0;
   clearEdges(); fxSeen = null; Sound.muted = false; R.trail = []; R.parts = [];
-  if (kind === 'host') { Skins = Net.skins.slice(); Names = [Net.names[0], Net.names[1]]; }
-  else { Skins = Settings.skins.slice(); Names = Skins.map(k => SKINS[k].name); }
+  Skins = Settings.skins.slice(); Names = Skins.map(k => SKINS[k].name);
   if (kind === 'cpu') { AIs = [null, makeAI(1, Settings.cpu)]; Names[1] += ' (컴퓨터)'; }
   buildTouch(kind === 'local' ? 'dual' : 'single');
-  if (kind === 'cpu' || kind === 'local') showReady(); else showScreen(null);
+  if (!cont) showReady(); else showScreen(null);
 }
-function toMenu() { startDemo(); showScreen('menu'); }
+function toMenu() { startDemo(); updContinue(); showScreen('menu'); }
+const CPU_NAME = { veasy: '아주 쉬움', easy: '쉬움', normal: '보통', hard: '어려움' };
+function updContinue() {
+  const b = $('#btn-continue');
+  if (lastKind !== 'cpu' && lastKind !== 'local') { b.style.display = 'none'; return; }
+  const what = lastKind === 'cpu' ? CPU_NAME[Settings.cpu] : '둘이서';
+  const rec = series[0] + series[1] > 0 ? ` · ${series[0]}:${series[1]}` : '';
+  b.innerHTML = `🔁 이어하기 <small style="opacity:.75;font-size:14px;white-space:nowrap">${what} · ${Settings.winScore}점${rec}</small>`;
+  b.style.display = 'block';
+}
 
 // 모드별 조작법 안내
 function ctrlHTML(kind) {
   const tips = `<div class="tips mini">⚡ <b>강스파이크</b>: 점프 중에 치기 (↓ 내리꽂기 · ↑ 띄우기 · 앞뒤 키 = 더 세게)<br>🤸 <b>다이빙</b>: 땅에서 방향키 + 치기</div>`;
-  if (isTouch) {
+  if (touchUI()) {
     const head = kind === 'local'
-      ? '<div class="note">화면 아래 <b>왼쪽 버튼</b>은 ${esc(SKINS[Settings.skins[0]].name)}, <b>오른쪽 버튼</b>은 ${esc(SKINS[Settings.skins[1]].name)}예요</div>'
+      ? `<div class="note">${Settings.board ? '화면 양옆' : '화면 아래'} <b>왼쪽 버튼</b>은 ${esc(SKINS[Settings.skins[0]].name)}, <b>오른쪽 버튼</b>은 ${esc(SKINS[Settings.skins[1]].name)}예요</div>`
       : '';
     return head + `<table class="keys mini">
       <tr><td>이동</td><td><kbd>◀</kbd> <kbd>▶</kbd></td></tr>
@@ -1040,7 +1219,7 @@ function ctrlHTML(kind) {
 function showReady() {
   paused = true; clearEdges();
   $('#ready-keys').innerHTML = ctrlHTML(mode);
-  $('#btn-go').innerHTML = isTouch ? '시작!' : '시작! <small style="opacity:.7">(아무 키나 눌러도 돼요)</small>';
+  $('#btn-go').innerHTML = touchUI() ? '시작!' : '시작! <small style="opacity:.7">(아무 키나 눌러도 돼요)</small>';
   showScreen('ready');
 }
 function closeReady() {
@@ -1052,14 +1231,8 @@ function doTick() {
   let in1, in2;
   if (mode === 'demo') { in1 = aiInput(AIs[0], G); in2 = aiInput(AIs[1], G); }
   else if (mode === 'cpu') { in1 = merge(keyInput('A'), keyInput('B'), padInput(0)); in2 = aiInput(AIs[1], G); }
-  else if (mode === 'local') { in1 = merge(keyInput('A'), padInput(0)); in2 = merge(keyInput('B'), padInput(1)); }
-  else if (mode === 'host') {
-    in1 = merge(keyInput('A'), keyInput('B'), padInput(0));
-    const r = Net.remote || {}, h = r.h || 0;
-    in2 = { x: r.x || 0, y: r.y || 0, hit: h > Net.lastH }; Net.lastH = h;
-  }
+  else { in1 = merge(keyInput('A'), padInput(0)); in2 = merge(keyInput('B'), padInput(1)); }
   tick(G, [in1, in2]);
-  if (mode === 'host') hostBroadcast(G);
 }
 
 function togglePause(open) {
@@ -1067,7 +1240,7 @@ function togglePause(open) {
   const isOpen = $('#scr-pause').classList.contains('show');
   const want = open === undefined ? !isOpen : open;
   if (want) {
-    const local = mode === 'cpu' || mode === 'local';
+    const local = !isOnline();
     paused = local;
     $('#pause-title').textContent = local ? '일시정지' : '메뉴';
     $('#pause-note').textContent = local ? '' : '온라인 대전 중에는 게임이 멈추지 않아요';
@@ -1087,8 +1260,12 @@ function showOver(v) {
   else title = `🏆 ${esc(Names[w])} 승리!`;
   $('#over-title').innerHTML = title;
   $('#over-score').textContent = `${v.score[0]} : ${v.score[1]}`;
+  series[w]++;
+  const games = series[0] + series[1];
+  $('#over-series').innerHTML = games > 1
+    ? `연속 ${games}판 전적 &nbsp;<b>${esc(Names[0])} ${series[0]}승</b> : <b>${series[1]}승 ${esc(Names[1])}</b>` : '';
   $('#btn-again').style.display = mode === 'guest' ? 'none' : 'block';
-  $('#over-note').textContent = mode === 'guest' ? '방장이 다시하기를 누르면 새 게임이 시작돼요' : '';
+  $('#over-note').textContent = mode === 'guest' ? '방장이 "한 판 더"를 누르면 새 게임이 시작돼요' : '';
   $('#btn-over-quit').textContent = Net.role ? '나가기' : '메뉴로';
   showScreen('over');
 }
@@ -1096,20 +1273,16 @@ function checkOver(v) {
   if (!v) return;
   if (mode === 'demo') { if (v.phase === 'over' && v.timer > v.rate * 3) startDemo(); return; }
   if (v.phase === 'over' && v.timer > v.rate * 1.1 && !overShown) { overShown = true; showOver(v); }
-  if (v.phase !== 'over' && overShown && mode === 'guest') { overShown = false; showScreen(null); }
 }
 
 let lastT = performance.now();
+const sampleLocal = () => merge(keyInput('A'), keyInput('B'), padInput(0));
 function frame(now) {
   const dt = Math.min(100, now - lastT); lastT = now;
   let view = null;
-  if (mode === 'guest') {
-    const i = merge(keyInput('A'), keyInput('B'), padInput(0));
-    view = viewFromSnaps(now);
-    view = stepPrediction(now, i, view);
-    guestSend(now, i);
-  }
-  else if (G) {
+  if (isOnline()) {
+    if (RB) { RB.update(dt, now, sampleLocal); view = viewFromGame(RB.G, clamp(RB.acc / RB.step, 0, 1)); }
+  } else if (G) {
     const step = 1000 / G.rate;
     if (!paused) {
       acc += dt; let n = 0;
@@ -1126,8 +1299,8 @@ function frame(now) {
 
 /* ================= 온라인 (Firebase) ================= */
 let db = null;
-const Net = { skins: [0, 1], role: null, code: null, room: null, refs: [], remote: {}, lastH: 0, hitSeq: 0, lastSent: '', lastSendT: 0, snaps: [], names: ['', ''],
-  pc: null, dc: null, dcOpen: false, rtcRefs: [], outQ: 0, inQ: -1, stQ: 0, lastStQ: -1 };
+const Net = { skins: [0, 1], role: null, code: null, room: null, refs: [], names: ['', ''], status: null, match: null,
+  pc: null, dc: null, dcOpen: false, rtcRefs: [], lastFbSend: 0 };
 const configured = () => !!(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.databaseURL);
 function fbReady() {
   if (!configured()) { toast('온라인 대전은 Firebase 설정이 필요해요 (코드 맨 위 FIREBASE_CONFIG)'); return false; }
@@ -1143,6 +1316,27 @@ function getName() {
   if (!n) { toast('이름을 먼저 입력해 주세요'); $('#in-name').focus(); return null; }
   Settings.name = n; saveSettings(); return n;
 }
+function makeMatch() {
+  const rate = RATES[Settings.speed] || 25;
+  return { id: (Date.now() % 1e9) + Math.floor(Math.random() * 1000), seed: newSeed(), rate, len: Settings.winScore,
+           delay: Math.max(1, Math.round(rate * 0.05)), maxRoll: Math.round(rate * 0.6) };
+}
+function startOnline(match) {
+  const me = Net.role === 'host' ? 0 : 1, room = Net.room;
+  mode = Net.role; lastKind = mode; paused = false; overShown = false;
+  fxSeen = null; clearEdges(); Sound.muted = false; R.parts = [];
+  Names = [Net.names[0], Net.names[1]]; Skins = Net.skins.slice();
+  // 직접 연결(WebRTC)이 되면 그쪽으로 빠르게 보내고, Firebase로도 가끔 같이 보내서 끊겨도 이어지게
+  RB = createRollback(match, me,
+    m => {
+      if (Net.room !== room) return;
+      const now = performance.now(), direct = Net.dcOpen && rtcSend({ k: 'i', m });
+      if (!direct || now - Net.lastFbSend > 400) { Net.lastFbSend = now; room.child('i' + me).set(m); }
+    },
+    m => { if (Net.room !== room) return; if (Net.dcOpen) rtcSend({ k: 's', m }); room.child('sync').set(m); });
+  R.trail = []; buildTouch('single'); showScreen(null);
+}
+function stopOnlineGame() { RB = null; startDemo(); }
 let busy = false;
 async function createRoom() {
   if (busy || !fbReady()) return;
@@ -1157,20 +1351,22 @@ async function createRoom() {
     if (!ref) { toast('방을 만들지 못했어요. 다시 시도해 주세요'); return; }
     await ref.set({ host: { name, skin: Settings.mySkin }, status: 'waiting', created: firebase.database.ServerValue.TIMESTAMP });
     ref.onDisconnect().remove();
-    Object.assign(Net, { role: 'host', code, room: ref, remote: {}, lastH: 0, names: [name, ''], skins: [Settings.mySkin, 1] });
+    Object.assign(Net, { role: 'host', code, room: ref, names: [name, ''], skins: [Settings.mySkin, 1], status: 'waiting', match: null });
+    series = [0, 0];
     netListen(ref.child('guest'), 'value', s => {
       const g = s.val(), had = !!Net.names[1];
       Net.names[1] = g ? g.name : '';
       if (g) Net.skins[1] = g.skin | 0;
       if (g && !had) hostRtcStart();
       if (!g && had) {
-        rtcClose(); ref.child('rtc').remove();
         toast('상대가 나갔어요');
-        if (mode === 'host') { ref.update({ status: 'waiting', state: null }); startDemo(); showScreen('room'); }
+        rtcClose(); ref.child('rtc').remove();
+        if (isOnline()) { ref.update({ status: 'waiting' }); stopOnlineGame(); showScreen('room'); }
+        series = [0, 0];
       }
       updateRoomUI();
     });
-    netListen(ref.child('input'), 'value', s => { if (!Net.dcOpen) Net.remote = s.val() || {}; });
+    netListen(ref.child('i1'), 'value', s => { if (RB) RB.receive(s.val(), performance.now()); });
     startChat();
     updateRoomUI(); showScreen('room');
   } catch (e) { console.error(e); toast('연결에 실패했어요: ' + (e.message || e)); }
@@ -1192,24 +1388,27 @@ async function joinRoom() {
     const r = await ref.child('guest').transaction(cur => cur ? undefined : { name, skin: mySkin });
     if (!r.committed) { toast('방이 꽉 찼어요'); return; }
     ref.child('guest').onDisconnect().remove();
-    ref.child('input').onDisconnect().remove();
-    Object.assign(Net, { role: 'guest', code, room: ref, hitSeq: 0, lastSent: '', snaps: [], names: [snap.val().host.name, name], skins: [hostSkin, mySkin] });
+    ref.child('i1').onDisconnect().remove();
+    Object.assign(Net, { role: 'guest', code, room: ref, names: [snap.val().host.name, name], skins: [hostSkin, mySkin], status: null, match: null });
+    series = [0, 0];
+    const maybeStart = () => {
+      if (Net.status === 'playing' && Net.match && (!RB || RB.mid !== Net.match.id)) startOnline(Net.match);
+    };
     netListen(ref.child('host'), 'value', s => {
       if (!s.exists()) { toast('방이 닫혔어요'); leaveRoom(true); }
       else { Net.names[0] = s.val().name; Net.skins[0] = s.val().skin | 0; updateRoomUI(); }
     });
     netListen(ref.child('status'), 'value', s => {
-      const st = s.val();
-      if (st === 'playing' && mode !== 'guest') startGuestView();
-      else if (st === 'waiting' && mode === 'guest') { startDemo(); showScreen('room'); }
+      Net.status = s.val();
+      if (Net.status === 'waiting' && isOnline()) { stopOnlineGame(); series = [0, 0]; showScreen('room'); }
+      maybeStart();
     });
+    netListen(ref.child('match'), 'value', s => { Net.match = s.val(); maybeStart(); });
+    netListen(ref.child('i0'), 'value', s => { if (RB) RB.receive(s.val(), performance.now()); });
+    netListen(ref.child('sync'), 'value', s => { if (RB) RB.receiveSync(s.val()); });
     guestRtcStart();
-    netListen(ref.child('state'), 'value', s => {
-      const a = s.val();
-      if (a && mode === 'guest' && !Net.dcOpen) { Net.snaps.push({ t: performance.now(), s: decode(a) }); if (Net.snaps.length > 30) Net.snaps.shift(); }
-    });
     startChat();
-    updateRoomUI(); showScreen('room');
+    updateRoomUI(); if (!isOnline()) showScreen('room');
   } catch (e) { console.error(e); toast('연결에 실패했어요: ' + (e.message || e)); }
   finally { busy = false; }
 }
@@ -1227,110 +1426,28 @@ function updateRoomUI() {
     ? (Net.names[1] ? `목표 ${Settings.winScore}점 · 속도 ${SPEED_NAME[Settings.speed]} — 준비되면 시작!` : '친구에게 방 코드를 알려 주세요')
     : '방장이 시작하면 게임이 시작돼요';
 }
-function hostStart() {
+function hostStart(cont) {
   if (!Net.names[1]) { toast('상대를 기다리는 중이에요'); return; }
-  Net.lastH = (Net.remote && Net.remote.h) || 0;
-  Net.room.update({ status: 'playing' });
-  startGame('host');
-}
-function startGuestView() {
-  mode = 'guest'; overShown = false; paused = false;
-  Net.snaps = []; fxSeen = null; clearEdges(); Sound.muted = false; R.trail = []; R.parts = [];
-  Names = [Net.names[0], Net.names[1]]; Skins = Net.skins.slice();
-  Net.pred = newPlayer(1); Net.predAcc = 0; Net.predLastT = performance.now(); Net.predPhase = null;
-  buildTouch('single'); showScreen(null);
-}
-let guestPendingHit = false;
-function guestSend(now, i) {
-  if (i.hit) guestPendingHit = true;
-  if (!Net.room) return;
-  const direct = Net.dcOpen;
-  if (!direct && now - Net.lastSendT < 33) return;       // 중계(Firebase) 경로만 전송 빈도 제한
-  if (guestPendingHit) Net.hitSeq++;
-  guestPendingHit = false;
-  const key = `${i.x},${i.y},${Net.hitSeq}`, changed = key !== Net.lastSent;
-  if (direct) {                                          // 직접 연결: 바뀌면 즉시, 아니어도 25ms마다 재전송(패킷 유실 대비)
-    if (!changed && now - Net.lastSendT < 25) return;
-    Net.lastSendT = now; Net.lastSent = key;
-    rtcSend({ q: ++Net.outQ, x: i.x, y: i.y, h: Net.hitSeq });
-    return;
-  }
-  Net.lastSendT = now;
-  if (changed) { Net.lastSent = key; Net.room.child('input').set({ x: i.x, y: i.y, h: Net.hitSeq }); }
-}
-// 내 캐릭터는 호스트 응답을 기다리지 않고 로컬에서 바로 예측해서 움직인다 (입력 지연 제거).
-// 호스트가 보내주는 진짜 위치는 계속 참고해서 살짝 당겨 보정하므로 어긋나지 않는다.
-function stepPrediction(now, i, view) {
-  if (!Net.pred) return view;
-  const rate = (view && view.rate) || 25, step = 1000 / rate;
-  Net.predAcc += Math.min(100, now - Net.predLastT); Net.predLastT = now;
-  let n = 0, hit = i.hit;
-  while (Net.predAcc >= step && n < 5) {
-    Net.predAcc -= step;
-    playerStep(Net.pred, { x: i.x, y: i.y, hit }); hit = false; n++;
-  }
-  if (view && view.phase === 'ready' && Net.predPhase !== 'ready') Object.assign(Net.pred, newPlayer(1));
-  Net.predPhase = view ? view.phase : Net.predPhase;
-  // 서버 위치 보정: 최신 스냅샷 기준. 작은 오차(네트워크 지연분)는 무시해서 조작감을 유지하고,
-  // 큰 오차일 때만 당겨 맞춘다. 플레이 중이 아닐 땐(호스트가 내 입력을 안 받음) 서버 위치를 그대로 따른다.
-  const lastSn = Net.snaps.length ? Net.snaps[Net.snaps.length - 1].s : null;
-  if (lastSn && lastSn.p && lastSn.p[1]) {
-    const auth = lastSn.p[1], ex = Math.abs(Net.pred.x - auth.x), ey = Math.abs(Net.pred.y - auth.y);
-    const sync = () => { Net.pred.x = auth.x; Net.pred.y = auth.y; Net.pred.state = auth.state; Net.pred.diveDir = auth.diveDir; };
-    if (lastSn.phase !== 'play') sync();
-    else if (ex > 70 || ey > 70) sync();
-    else if (ex > 28 || ey > 28) { Net.pred.x += (auth.x - Net.pred.x) * 0.08; Net.pred.y += (auth.y - Net.pred.y) * 0.08; }
-  }
-  if (!view) return view;
-  const p1 = Object.assign({}, view.p[1], { x: Net.pred.x, y: Net.pred.y, state: Net.pred.state, diveDir: Net.pred.diveDir });
-  return Object.assign({}, view, { p: [view.p[0], p1] });
-}
-const interpBase = () => Net.dcOpen ? 50 : 100;   // 직접 연결이면 보간 버퍼를 절반으로
-function viewFromSnaps(now) {
-  const sn = Net.snaps; if (!sn.length) return null;
-  // 최근 스냅샷 도착 간격/편차를 보고 보간 지연을 자동 조절 (네트워크가 들쭉날쭉해도 안 끊기게)
-  const base = interpBase();
-  let interp = base;
-  if (sn.length >= 4) {
-    const n = Math.min(8, sn.length - 1);
-    let sum = 0, maxGap = 0;
-    for (let k = sn.length - n; k < sn.length; k++) {
-      const g = sn[k].t - sn[k - 1].t;
-      sum += g; if (g > maxGap) maxGap = g;
-    }
-    const avg = sum / n;
-    interp = clamp(avg * 1.4 + (maxGap - avg) * 0.8, base, 260);
-  }
-  const rt = now - interp;
-  let i = sn.length - 1; while (i > 0 && sn[i].t > rt) i--;
-  const a = sn[i], b = sn[i + 1];
-  if (!b) {
-    // 아직 다음 스냅샷이 안 왔으면 화면을 얼리지 말고 최근 속도로 잠깐 추정해서 이어붙임
-    const prev = sn[sn.length - 2];
-    if (prev && a === sn[sn.length - 1]) {
-      const dt = a.t - prev.t;
-      const ahead = clamp((now - a.t) / (dt || 1), 0, 1.5);
-      return lerpView(prev.s, a.s, 1 + ahead);
-    }
-    return a.s;
-  }
-  return lerpView(a.s, b.s, clamp((rt - a.t) / ((b.t - a.t) || 1), 0, 1));
+  if (!cont) series = [0, 0];
+  const match = makeMatch();
+  Net.room.update({ status: 'playing', match });
+  startOnline(match);
 }
 function leaveRoom(closedByHost) {
   netCleanup(); rtcClose();
   const r = Net.room;
   if (r && !closedByHost) {
-    if (Net.role === 'host') { r.onDisconnect().cancel(); r.remove(); }  // rtc 신호 데이터도 방과 함께 삭제
+    if (Net.role === 'host') { r.onDisconnect().cancel(); r.remove(); }
     else {
-      r.child('guest').onDisconnect().cancel(); r.child('input').onDisconnect().cancel();
-      r.child('guest').remove(); r.child('input').remove();
+      r.child('guest').onDisconnect().cancel(); r.child('i1').onDisconnect().cancel();
+      r.child('guest').remove(); r.child('i1').remove();
     }
   }
-  Object.assign(Net, { role: null, code: null, room: null, snaps: [], names: ['', ''] });
+  Object.assign(Net, { role: null, code: null, room: null, names: ['', ''], status: null, match: null });
+  RB = null; lastKind = null;
   closeChat(); CHAT = []; CHAT_UNREAD = 0; CHAT_LAST = 0; paintChatBtn();
   toMenu();
 }
-
 
 /* ================= 직접 연결 (WebRTC DataChannel) =================
    Firebase는 연결 신호(offer/answer/ICE)만 주고받고, 게임 데이터(입력·상태)는 브라우저끼리 직접 주고받는다.
@@ -1364,7 +1481,7 @@ function rtcBind(pc, sig, mine, theirs) {
 function rtcChannel(dc, onMsg) {
   Net.dc = dc;
   dc.onopen = () => {
-    Net.dcOpen = true; Net.inQ = -1; Net.lastStQ = -1; Net.lastSent = '';
+    Net.dcOpen = true;
     console.log('[nyang] 직접 연결(P2P) 성공'); if (!inGame()) toast('⚡ 빠른 직접 연결됨');
   };
   dc.onclose = dc.onerror = () => { if (Net.dc === dc) Net.dcOpen = false; };
@@ -1378,10 +1495,7 @@ async function hostRtcStart() {
     await sig.remove();
     const pc = new RTCPeerConnection(RTC_CFG); Net.pc = pc;
     const flush = rtcBind(pc, sig, 'hostIce', 'guestIce');
-    rtcChannel(pc.createDataChannel('g', { ordered: false, maxRetransmits: 0 }), m => {
-      if (m.q <= Net.inQ) return;                    // 순서 뒤바뀐 옛 입력은 버림
-      Net.inQ = m.q; Net.remote = { x: m.x, y: m.y, h: m.h };
-    });
+    rtcChannel(pc.createDataChannel('g', { ordered: false, maxRetransmits: 0 }), rtcOnMsg);
     rtcListen(sig.child('answer'), 'value', s => {
       const a = s.val();
       if (a && Net.pc === pc && !pc.remoteDescription) pc.setRemoteDescription(a).then(flush).catch(() => {});
@@ -1398,11 +1512,7 @@ function guestRtcStart() {
   try {
     const pc = new RTCPeerConnection(RTC_CFG); Net.pc = pc;
     const flush = rtcBind(pc, sig, 'guestIce', 'hostIce');
-    pc.ondatachannel = e => rtcChannel(e.channel, m => {
-      if (m.q <= Net.lastStQ) return;                // 순서 뒤바뀐 옛 상태는 버림
-      Net.lastStQ = m.q;
-      if (mode === 'guest') { Net.snaps.push({ t: performance.now(), s: decode(m.s) }); if (Net.snaps.length > 30) Net.snaps.shift(); }
-    });
+    pc.ondatachannel = e => rtcChannel(e.channel, rtcOnMsg);
     rtcListen(sig.child('offer'), 'value', async s => {
       const o = s.val();
       if (!o || Net.pc !== pc || pc.remoteDescription) return;
@@ -1414,9 +1524,11 @@ function guestRtcStart() {
     });
   } catch (e) { console.warn('rtc guest', e); }
 }
-function hostBroadcast(G) {
-  if (Net.dcOpen) rtcSend({ q: ++Net.stQ, s: encode(G) });
-  else if (Net.room) Net.room.child('state').set(encode(G));
+// 직접 연결로 받은 입력·동기 확인 데이터 (순서가 바뀌거나 빠져도 롤백 엔진이 알아서 처리)
+function rtcOnMsg(o) {
+  if (!RB || !o) return;
+  if (o.k === 'i') RB.receive(o.m, performance.now());
+  else if (o.k === 's' && Net.role === 'guest') RB.receiveSync(o.m);
 }
 
 /* ================= 채팅 ================= */
@@ -1453,11 +1565,12 @@ function chatTip(m) {
 function startChat() {
   CHAT = []; CHAT_UNREAD = 0; CHAT_LAST = 0;
   if (!Net.room) return;
+  let loaded = false;   // 처음 불러온 기록은 안 읽음으로 세지 않음 (방의 첫 메시지도 알림이 뜨도록 따로 표시)
   netListen(Net.room.child('chat').limitToLast(40), 'value', s => {
     const v = s.val() || {};
     const list = Object.entries(v).map(([k, m]) => ({ k, ...m })).sort((a, b) => (a.t || 0) - (b.t || 0) || (a.k < b.k ? -1 : 1));
     const fresh = list.filter(m => (m.t || 0) > CHAT_LAST && CHAT.every(c => c.k !== m.k));
-    const first = CHAT.length === 0 && CHAT_LAST === 0;
+    const first = !loaded; loaded = true;
     CHAT = list; if (list.length) CHAT_LAST = Math.max(CHAT_LAST, ...list.map(m => m.t || 0));
     if (!first && !CHAT_OPEN) fresh.forEach(m => { if (m.role !== Net.role) CHAT_UNREAD++; });
     renderChat();
@@ -1526,14 +1639,17 @@ const actions = {
   help: () => showScreen('help'),
   menu: () => showScreen('menu'),
   sound: () => { Settings.sound = !Settings.sound; saveSettings(); updSound(); },
-  create: createRoom, join: joinRoom, start: hostStart,
+  board: () => {
+    Settings.board = !Settings.board; saveSettings(); updBoard();
+    if (Settings.board) { goFull(); toast('🖥 전자칠판 모드: 게임 화면 양옆에 큰 버튼이 나와요'); }
+    else if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+  },
+  create: createRoom, join: joinRoom, start: () => hostStart(false),
   leave: () => leaveRoom(),
   resume: () => togglePause(false),
   quit: () => { if (Net.role) leaveRoom(); else toMenu(); },
-  again: () => {
-    if (mode === 'host') { Net.lastH = (Net.remote && Net.remote.h) || 0; startGame('host'); }
-    else startGame(mode);
-  },
+  again: () => { if (mode === 'host') hostStart(true); else startGame(mode, true); },
+  cont: () => { if (lastKind === 'cpu' || lastKind === 'local') startGame(lastKind, true); },
   hud: () => togglePause(true),
   go: () => closeReady(),
   openChat, closeChat,
@@ -1546,10 +1662,11 @@ document.addEventListener('click', e => {
   if (seg) {
     const key = seg.parentElement.dataset.set;
     Settings[key] = key === 'winScore' ? +seg.dataset.v : seg.dataset.v;
-    saveSettings(); updSegs(); return;
+    saveSettings(); updSegs(); updContinue(); return;
   }
   const b = e.target.closest('[data-act]'); if (!b) return;
   Sound.get(); b.blur();
+  if (Settings.board && ['cpu', 'local', 'cont', 'create', 'join', 'start'].includes(b.dataset.act)) goFull();
   const f = actions[b.dataset.act]; if (f) f(b);
 });
 function updSegs() {
@@ -1574,9 +1691,16 @@ function pickSkin(side, i) {
   }
   saveSettings(); buildSwatches();
 }
+function updBoard() { $('#btn-board').textContent = Settings.board ? '🖥 전자칠판 모드: 켜짐' : '🖥 전자칠판 모드: 꺼짐'; $('#btn-board').classList.toggle('green', !!Settings.board); $('#btn-board').classList.toggle('gray', !Settings.board); }
+function goFull() {
+  const d = document.documentElement;
+  if (document.fullscreenElement || !d.requestFullscreen) return;
+  d.requestFullscreen().catch(() => {});
+}
+addEventListener('fullscreenchange', () => setTimeout(layout, 50));
 function updSound() { $('#btn-sound').textContent = Settings.sound ? '🔊 소리 켜짐' : '🔇 소리 꺼짐'; }
 
-updSegs(); updSound(); buildSwatches(); layout(); startDemo();
+updSegs(); updSound(); updBoard(); buildSwatches(); layout(); startDemo();
 requestAnimationFrame(frame);
 </script>
 </body>
