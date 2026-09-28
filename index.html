@@ -1059,7 +1059,7 @@ function doTick() {
     in2 = { x: r.x || 0, y: r.y || 0, hit: h > Net.lastH }; Net.lastH = h;
   }
   tick(G, [in1, in2]);
-  if (mode === 'host' && Net.room) Net.room.child('state').set(encode(G));
+  if (mode === 'host') hostBroadcast(G);
 }
 
 function togglePause(open) {
@@ -1126,7 +1126,8 @@ function frame(now) {
 
 /* ================= 온라인 (Firebase) ================= */
 let db = null;
-const Net = { skins: [0, 1], role: null, code: null, room: null, refs: [], remote: {}, lastH: 0, hitSeq: 0, lastSent: '', lastSendT: 0, snaps: [], names: ['', ''] };
+const Net = { skins: [0, 1], role: null, code: null, room: null, refs: [], remote: {}, lastH: 0, hitSeq: 0, lastSent: '', lastSendT: 0, snaps: [], names: ['', ''],
+  pc: null, dc: null, dcOpen: false, rtcRefs: [], outQ: 0, inQ: -1, stQ: 0, lastStQ: -1 };
 const configured = () => !!(FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.databaseURL);
 function fbReady() {
   if (!configured()) { toast('온라인 대전은 Firebase 설정이 필요해요 (코드 맨 위 FIREBASE_CONFIG)'); return false; }
@@ -1161,13 +1162,15 @@ async function createRoom() {
       const g = s.val(), had = !!Net.names[1];
       Net.names[1] = g ? g.name : '';
       if (g) Net.skins[1] = g.skin | 0;
+      if (g && !had) hostRtcStart();
       if (!g && had) {
+        rtcClose(); ref.child('rtc').remove();
         toast('상대가 나갔어요');
         if (mode === 'host') { ref.update({ status: 'waiting', state: null }); startDemo(); showScreen('room'); }
       }
       updateRoomUI();
     });
-    netListen(ref.child('input'), 'value', s => { Net.remote = s.val() || {}; });
+    netListen(ref.child('input'), 'value', s => { if (!Net.dcOpen) Net.remote = s.val() || {}; });
     startChat();
     updateRoomUI(); showScreen('room');
   } catch (e) { console.error(e); toast('연결에 실패했어요: ' + (e.message || e)); }
@@ -1200,9 +1203,10 @@ async function joinRoom() {
       if (st === 'playing' && mode !== 'guest') startGuestView();
       else if (st === 'waiting' && mode === 'guest') { startDemo(); showScreen('room'); }
     });
+    guestRtcStart();
     netListen(ref.child('state'), 'value', s => {
       const a = s.val();
-      if (a && mode === 'guest') { Net.snaps.push({ t: performance.now(), s: decode(a) }); if (Net.snaps.length > 30) Net.snaps.shift(); }
+      if (a && mode === 'guest' && !Net.dcOpen) { Net.snaps.push({ t: performance.now(), s: decode(a) }); if (Net.snaps.length > 30) Net.snaps.shift(); }
     });
     startChat();
     updateRoomUI(); showScreen('room');
@@ -1239,12 +1243,20 @@ function startGuestView() {
 let guestPendingHit = false;
 function guestSend(now, i) {
   if (i.hit) guestPendingHit = true;
-  if (!Net.room || now - Net.lastSendT < 33) return;
-  Net.lastSendT = now;
+  if (!Net.room) return;
+  const direct = Net.dcOpen;
+  if (!direct && now - Net.lastSendT < 33) return;       // 중계(Firebase) 경로만 전송 빈도 제한
   if (guestPendingHit) Net.hitSeq++;
   guestPendingHit = false;
-  const key = `${i.x},${i.y},${Net.hitSeq}`;
-  if (key !== Net.lastSent) { Net.lastSent = key; Net.room.child('input').set({ x: i.x, y: i.y, h: Net.hitSeq }); }
+  const key = `${i.x},${i.y},${Net.hitSeq}`, changed = key !== Net.lastSent;
+  if (direct) {                                          // 직접 연결: 바뀌면 즉시, 아니어도 25ms마다 재전송(패킷 유실 대비)
+    if (!changed && now - Net.lastSendT < 25) return;
+    Net.lastSendT = now; Net.lastSent = key;
+    rtcSend({ q: ++Net.outQ, x: i.x, y: i.y, h: Net.hitSeq });
+    return;
+  }
+  Net.lastSendT = now;
+  if (changed) { Net.lastSent = key; Net.room.child('input').set({ x: i.x, y: i.y, h: Net.hitSeq }); }
 }
 // 내 캐릭터는 호스트 응답을 기다리지 않고 로컬에서 바로 예측해서 움직인다 (입력 지연 제거).
 // 호스트가 보내주는 진짜 위치는 계속 참고해서 살짝 당겨 보정하므로 어긋나지 않는다.
@@ -1259,21 +1271,26 @@ function stepPrediction(now, i, view) {
   }
   if (view && view.phase === 'ready' && Net.predPhase !== 'ready') Object.assign(Net.pred, newPlayer(1));
   Net.predPhase = view ? view.phase : Net.predPhase;
-  if (view && view.p && view.p[1]) {
-    const auth = view.p[1];
-    if (Math.abs(Net.pred.x - auth.x) > 60 || Math.abs(Net.pred.y - auth.y) > 60) {
-      Net.pred.x = auth.x; Net.pred.y = auth.y; Net.pred.state = auth.state; Net.pred.diveDir = auth.diveDir;
-    } else { Net.pred.x += (auth.x - Net.pred.x) * 0.15; Net.pred.y += (auth.y - Net.pred.y) * 0.15; }
+  // 서버 위치 보정: 최신 스냅샷 기준. 작은 오차(네트워크 지연분)는 무시해서 조작감을 유지하고,
+  // 큰 오차일 때만 당겨 맞춘다. 플레이 중이 아닐 땐(호스트가 내 입력을 안 받음) 서버 위치를 그대로 따른다.
+  const lastSn = Net.snaps.length ? Net.snaps[Net.snaps.length - 1].s : null;
+  if (lastSn && lastSn.p && lastSn.p[1]) {
+    const auth = lastSn.p[1], ex = Math.abs(Net.pred.x - auth.x), ey = Math.abs(Net.pred.y - auth.y);
+    const sync = () => { Net.pred.x = auth.x; Net.pred.y = auth.y; Net.pred.state = auth.state; Net.pred.diveDir = auth.diveDir; };
+    if (lastSn.phase !== 'play') sync();
+    else if (ex > 70 || ey > 70) sync();
+    else if (ex > 28 || ey > 28) { Net.pred.x += (auth.x - Net.pred.x) * 0.08; Net.pred.y += (auth.y - Net.pred.y) * 0.08; }
   }
   if (!view) return view;
   const p1 = Object.assign({}, view.p[1], { x: Net.pred.x, y: Net.pred.y, state: Net.pred.state, diveDir: Net.pred.diveDir });
   return Object.assign({}, view, { p: [view.p[0], p1] });
 }
-const INTERP = 100;
+const interpBase = () => Net.dcOpen ? 50 : 100;   // 직접 연결이면 보간 버퍼를 절반으로
 function viewFromSnaps(now) {
   const sn = Net.snaps; if (!sn.length) return null;
   // 최근 스냅샷 도착 간격/편차를 보고 보간 지연을 자동 조절 (네트워크가 들쭉날쭉해도 안 끊기게)
-  let interp = INTERP;
+  const base = interpBase();
+  let interp = base;
   if (sn.length >= 4) {
     const n = Math.min(8, sn.length - 1);
     let sum = 0, maxGap = 0;
@@ -1282,7 +1299,7 @@ function viewFromSnaps(now) {
       sum += g; if (g > maxGap) maxGap = g;
     }
     const avg = sum / n;
-    interp = clamp(avg * 1.4 + (maxGap - avg) * 0.8, INTERP, 260);
+    interp = clamp(avg * 1.4 + (maxGap - avg) * 0.8, base, 260);
   }
   const rt = now - interp;
   let i = sn.length - 1; while (i > 0 && sn[i].t > rt) i--;
@@ -1300,10 +1317,10 @@ function viewFromSnaps(now) {
   return lerpView(a.s, b.s, clamp((rt - a.t) / ((b.t - a.t) || 1), 0, 1));
 }
 function leaveRoom(closedByHost) {
-  netCleanup();
+  netCleanup(); rtcClose();
   const r = Net.room;
   if (r && !closedByHost) {
-    if (Net.role === 'host') { r.onDisconnect().cancel(); r.remove(); }
+    if (Net.role === 'host') { r.onDisconnect().cancel(); r.remove(); }  // rtc 신호 데이터도 방과 함께 삭제
     else {
       r.child('guest').onDisconnect().cancel(); r.child('input').onDisconnect().cancel();
       r.child('guest').remove(); r.child('input').remove();
@@ -1312,6 +1329,94 @@ function leaveRoom(closedByHost) {
   Object.assign(Net, { role: null, code: null, room: null, snaps: [], names: ['', ''] });
   closeChat(); CHAT = []; CHAT_UNREAD = 0; CHAT_LAST = 0; paintChatBtn();
   toMenu();
+}
+
+
+/* ================= 직접 연결 (WebRTC DataChannel) =================
+   Firebase는 연결 신호(offer/answer/ICE)만 주고받고, 게임 데이터(입력·상태)는 브라우저끼리 직접 주고받는다.
+   직접 연결이 안 되는 망(학교 방화벽 등)이면 dcOpen이 false로 남아 기존 Firebase 중계로 자동 동작한다. */
+const RTC_CFG = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
+function rtcListen(ref, ev, fn) { ref.on(ev, fn); Net.rtcRefs.push([ref, ev, fn]); }
+function rtcClose() {
+  Net.dcOpen = false;
+  Net.rtcRefs.forEach(([r, e, f]) => r.off(e, f)); Net.rtcRefs = [];
+  try { Net.dc && Net.dc.close(); } catch (e) {}
+  try { Net.pc && Net.pc.close(); } catch (e) {}
+  Net.dc = Net.pc = null;
+}
+function rtcSend(o) {
+  const d = Net.dc;
+  if (!d || d.readyState !== 'open' || d.bufferedAmount > 16384) return false;
+  try { d.send(JSON.stringify(o)); return true; } catch (e) { return false; }
+}
+function rtcBind(pc, sig, mine, theirs) {
+  const pend = [];
+  pc.onicecandidate = e => { if (e.candidate) sig.child(mine).push(e.candidate.toJSON()); };
+  pc.onconnectionstatechange = () => {
+    if (['failed', 'closed', 'disconnected'].includes(pc.connectionState) && Net.pc === pc) Net.dcOpen = false;
+  };
+  rtcListen(sig.child(theirs), 'child_added', s => {
+    const c = s.val();
+    if (pc.remoteDescription) pc.addIceCandidate(c).catch(() => {}); else pend.push(c);
+  });
+  return () => { pend.splice(0).forEach(c => pc.addIceCandidate(c).catch(() => {})); };
+}
+function rtcChannel(dc, onMsg) {
+  Net.dc = dc;
+  dc.onopen = () => {
+    Net.dcOpen = true; Net.inQ = -1; Net.lastStQ = -1; Net.lastSent = '';
+    console.log('[nyang] 직접 연결(P2P) 성공'); if (!inGame()) toast('⚡ 빠른 직접 연결됨');
+  };
+  dc.onclose = dc.onerror = () => { if (Net.dc === dc) Net.dcOpen = false; };
+  dc.onmessage = e => { try { onMsg(JSON.parse(e.data)); } catch (err) {} };
+}
+async function hostRtcStart() {
+  if (typeof RTCPeerConnection === 'undefined' || !Net.room) return;
+  rtcClose();
+  const sig = Net.room.child('rtc');
+  try {
+    await sig.remove();
+    const pc = new RTCPeerConnection(RTC_CFG); Net.pc = pc;
+    const flush = rtcBind(pc, sig, 'hostIce', 'guestIce');
+    rtcChannel(pc.createDataChannel('g', { ordered: false, maxRetransmits: 0 }), m => {
+      if (m.q <= Net.inQ) return;                    // 순서 뒤바뀐 옛 입력은 버림
+      Net.inQ = m.q; Net.remote = { x: m.x, y: m.y, h: m.h };
+    });
+    rtcListen(sig.child('answer'), 'value', s => {
+      const a = s.val();
+      if (a && Net.pc === pc && !pc.remoteDescription) pc.setRemoteDescription(a).then(flush).catch(() => {});
+    });
+    await pc.setLocalDescription(await pc.createOffer());
+    if (Net.pc !== pc) return;
+    await sig.child('offer').set({ type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+  } catch (e) { console.warn('rtc host', e); }
+}
+function guestRtcStart() {
+  if (typeof RTCPeerConnection === 'undefined' || !Net.room) return;
+  rtcClose();
+  const sig = Net.room.child('rtc');
+  try {
+    const pc = new RTCPeerConnection(RTC_CFG); Net.pc = pc;
+    const flush = rtcBind(pc, sig, 'guestIce', 'hostIce');
+    pc.ondatachannel = e => rtcChannel(e.channel, m => {
+      if (m.q <= Net.lastStQ) return;                // 순서 뒤바뀐 옛 상태는 버림
+      Net.lastStQ = m.q;
+      if (mode === 'guest') { Net.snaps.push({ t: performance.now(), s: decode(m.s) }); if (Net.snaps.length > 30) Net.snaps.shift(); }
+    });
+    rtcListen(sig.child('offer'), 'value', async s => {
+      const o = s.val();
+      if (!o || Net.pc !== pc || pc.remoteDescription) return;
+      try {
+        await pc.setRemoteDescription(o); flush();
+        await pc.setLocalDescription(await pc.createAnswer());
+        await sig.child('answer').set({ type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+      } catch (e) { console.warn('rtc guest', e); }
+    });
+  } catch (e) { console.warn('rtc guest', e); }
+}
+function hostBroadcast(G) {
+  if (Net.dcOpen) rtcSend({ q: ++Net.stQ, s: encode(G) });
+  else if (Net.room) Net.room.child('state').set(encode(G));
 }
 
 /* ================= 채팅 ================= */
