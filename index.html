@@ -66,6 +66,23 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
 .score{font-size:40px;color:#e0672b;margin-bottom:6px}
 #toast{position:fixed;top:16px;left:50%;transform:translate(-50%,-20px);background:#1f2a44;color:#fff;padding:10px 18px;border-radius:12px;z-index:50;opacity:0;transition:.25s;pointer-events:none;font-size:16px;max-width:90vw;text-align:center}
 #toast.show{opacity:1;transform:translate(-50%,0)}
+.chatModal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(8,28,58,.45);padding:14px}
+.chatModal .card{max-width:420px;text-align:left}
+.chatbtn{position:relative}
+.cbadge{position:absolute;top:-6px;right:14px;min-width:17px;height:17px;border-radius:9px;background:#e0672b;color:#fff;font-size:10px;font-weight:700;line-height:17px;padding:0 4px;text-align:center}
+.chatbox{max-height:200px;min-height:60px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:2px 0 8px}
+.cmsg{font-size:14px;line-height:1.4;max-width:86%;align-self:flex-start;background:#fff6e6;padding:6px 10px;border-radius:10px;word-break:break-all}
+.cmsg.mine{align-self:flex-end;background:#ffe3b3}
+.cmsg .cn{font-size:11px;color:#a0855e;display:flex;align-items:center;gap:4px;margin-bottom:1px}
+.cmsg .cn i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.chat-empty{font-size:13px;color:#a0855e;text-align:center;padding:14px 0}
+.chatform{display:flex;gap:8px;align-items:center;margin-top:6px}
+.chatform input{flex:1;font-family:inherit;font-size:15px;padding:9px 10px;border-radius:10px;border:2px solid #f0dcb6;outline:none;background:#fff;color:var(--ink)}
+.chatform input:focus{border-color:#ffb347}
+.chat-tip{font-size:12px;color:#e0672b;min-height:15px;margin:2px 0}
+.quick{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 6px}
+.qchip{font-family:inherit;font-size:12px;color:#8a6f48;background:#fff;border:1.5px solid #f0dcb6;border-radius:14px;padding:5px 10px;cursor:pointer}
+.qchip:active{background:#fff6d6}
 #touch{display:none;justify-content:space-between;align-items:center;gap:10px}
 .pad{display:flex;gap:8px;align-items:center}
 .tb{width:62px;height:62px;border-radius:50%;border:none;font-family:inherit;font-size:22px;background:rgba(255,255,255,.92);color:var(--ink);box-shadow:0 4px 0 rgba(0,0,0,.25);touch-action:none;-webkit-user-select:none;user-select:none}
@@ -117,7 +134,7 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
     <tr><th></th><th>왼쪽 (1P)</th><th>오른쪽 (2P)</th></tr>
     <tr><td>이동</td><td><kbd>D</kbd> <kbd>G</kbd></td><td><kbd>←</kbd> <kbd>→</kbd></td></tr>
     <tr><td>점프</td><td><kbd>R</kbd></td><td><kbd>↑</kbd></td></tr>
-    <tr><td>아래</td><td><kbd>V</kbd></td><td><kbd>↓</kbd></td></tr>
+    <tr><td>아래</td><td><kbd>Shift</kbd></td><td><kbd>↓</kbd></td></tr>
     <tr><td>아래+앞</td><td><kbd>F</kbd></td><td><kbd>↓</kbd>+<kbd>←</kbd></td></tr>
     <tr><td>치기</td><td><kbd>Z</kbd></td><td><kbd>Enter</kbd></td></tr>
   </table>
@@ -157,6 +174,7 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
   <div class="note" id="room-info"></div>
   <div id="room-keys"></div>
   <button class="btn green" data-act="start" id="btn-start">시작하기</button>
+  <button class="btn gray chatbtn" data-act="openChat">💬 채팅<span class="cbadge" style="display:none">0</span></button>
   <button class="btn gray" data-act="leave">나가기</button>
 </div></div>
 
@@ -172,6 +190,7 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
   <h2 id="pause-title">일시정지</h2>
   <div class="note" id="pause-note"></div>
   <div id="pause-keys"></div>
+  <button class="btn gray chatbtn" data-act="openChat" id="btn-chat" style="display:none">💬 채팅<span class="cbadge" style="display:none">0</span></button>
   <button class="btn" data-act="resume">계속하기</button>
   <button class="btn gray" data-act="quit" id="btn-quit">메뉴로</button>
 </div></div>
@@ -186,6 +205,7 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
 </div></div>
 
 <div id="toast"></div>
+<div id="chatSheet"></div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
@@ -573,7 +593,7 @@ const Sound = {
 /* ================= 입력 ================= */
 const keys = {}, hitEdge = { A: false, B: false };
 const KEYSET = {
-  A: { left: ['KeyD'], right: ['KeyG'], up: ['KeyR'], down: ['KeyV'], hit: ['KeyZ'], downRight: ['KeyF'] },
+  A: { left: ['KeyD'], right: ['KeyG'], up: ['KeyR'], down: ['ShiftLeft'], hit: ['KeyZ'], downRight: ['KeyF'] },
   B: { left: ['ArrowLeft'], right: ['ArrowRight'], up: ['ArrowUp'], down: ['ArrowDown'], hit: ['Enter', 'NumpadEnter'] }
 };
 const GAME_CODES = new Set(Object.values(KEYSET).flatMap(k => Object.values(k).flat()).concat(['Space']));
@@ -1008,13 +1028,13 @@ function ctrlHTML(kind) {
       <tr><th></th><th>${esc(SKINS[Settings.skins[0]].name)} (왼쪽)</th><th>${esc(SKINS[Settings.skins[1]].name)} (오른쪽)</th></tr>
       <tr><td>이동</td><td><kbd>D</kbd> <kbd>G</kbd></td><td><kbd>←</kbd> <kbd>→</kbd></td></tr>
       <tr><td>점프</td><td><kbd>R</kbd></td><td><kbd>↑</kbd></td></tr>
-      <tr><td>아래</td><td><kbd>V</kbd></td><td><kbd>↓</kbd></td></tr>
+      <tr><td>아래</td><td><kbd>Shift</kbd></td><td><kbd>↓</kbd></td></tr>
     <tr><td>아래+앞</td><td><kbd>F</kbd></td><td><kbd>↓</kbd>+<kbd>←</kbd></td></tr>
       <tr><td>치기</td><td><kbd>Z</kbd></td><td><kbd>Enter</kbd></td></tr></table>` + tips;
   return `<table class="keys mini">
       <tr><td>이동</td><td><kbd>←</kbd> <kbd>→</kbd> 또는 <kbd>D</kbd> <kbd>G</kbd></td></tr>
       <tr><td>점프</td><td><kbd>↑</kbd> 또는 <kbd>R</kbd></td></tr>
-      <tr><td>아래</td><td><kbd>↓</kbd> 또는 <kbd>V</kbd></td></tr>
+      <tr><td>아래</td><td><kbd>↓</kbd> 또는 <kbd>Shift</kbd></td></tr>
       <tr><td>치기</td><td><kbd>Enter</kbd> 또는 <kbd>Z</kbd></td></tr></table>` + tips;
 }
 function showReady() {
@@ -1053,6 +1073,7 @@ function togglePause(open) {
     $('#pause-note').textContent = local ? '' : '온라인 대전 중에는 게임이 멈추지 않아요';
     $('#btn-quit').textContent = local ? '메뉴로' : '나가기';
     $('#pause-keys').innerHTML = ctrlHTML(mode);
+    $('#btn-chat').style.display = Net.room ? 'block' : 'none';
     clearEdges(); showScreen('pause');
   } else { paused = false; clearEdges(); showScreen(null); }
 }
@@ -1082,7 +1103,12 @@ let lastT = performance.now();
 function frame(now) {
   const dt = Math.min(100, now - lastT); lastT = now;
   let view = null;
-  if (mode === 'guest') { guestSend(now); view = viewFromSnaps(now); }
+  if (mode === 'guest') {
+    const i = merge(keyInput('A'), keyInput('B'), padInput(0));
+    view = viewFromSnaps(now);
+    view = stepPrediction(now, i, view);
+    guestSend(now, i);
+  }
   else if (G) {
     const step = 1000 / G.rate;
     if (!paused) {
@@ -1142,6 +1168,7 @@ async function createRoom() {
       updateRoomUI();
     });
     netListen(ref.child('input'), 'value', s => { Net.remote = s.val() || {}; });
+    startChat();
     updateRoomUI(); showScreen('room');
   } catch (e) { console.error(e); toast('연결에 실패했어요: ' + (e.message || e)); }
   finally { busy = false; }
@@ -1177,6 +1204,7 @@ async function joinRoom() {
       const a = s.val();
       if (a && mode === 'guest') { Net.snaps.push({ t: performance.now(), s: decode(a) }); if (Net.snaps.length > 30) Net.snaps.shift(); }
     });
+    startChat();
     updateRoomUI(); showScreen('room');
   } catch (e) { console.error(e); toast('연결에 실패했어요: ' + (e.message || e)); }
   finally { busy = false; }
@@ -1205,15 +1233,41 @@ function startGuestView() {
   mode = 'guest'; overShown = false; paused = false;
   Net.snaps = []; fxSeen = null; clearEdges(); Sound.muted = false; R.trail = []; R.parts = [];
   Names = [Net.names[0], Net.names[1]]; Skins = Net.skins.slice();
+  Net.pred = newPlayer(1); Net.predAcc = 0; Net.predLastT = performance.now(); Net.predPhase = null;
   buildTouch('single'); showScreen(null);
 }
-function guestSend(now) {
+let guestPendingHit = false;
+function guestSend(now, i) {
+  if (i.hit) guestPendingHit = true;
   if (!Net.room || now - Net.lastSendT < 33) return;
   Net.lastSendT = now;
-  const i = merge(keyInput('A'), keyInput('B'), padInput(0));
-  if (i.hit) Net.hitSeq++;
+  if (guestPendingHit) Net.hitSeq++;
+  guestPendingHit = false;
   const key = `${i.x},${i.y},${Net.hitSeq}`;
   if (key !== Net.lastSent) { Net.lastSent = key; Net.room.child('input').set({ x: i.x, y: i.y, h: Net.hitSeq }); }
+}
+// 내 캐릭터는 호스트 응답을 기다리지 않고 로컬에서 바로 예측해서 움직인다 (입력 지연 제거).
+// 호스트가 보내주는 진짜 위치는 계속 참고해서 살짝 당겨 보정하므로 어긋나지 않는다.
+function stepPrediction(now, i, view) {
+  if (!Net.pred) return view;
+  const rate = (view && view.rate) || 25, step = 1000 / rate;
+  Net.predAcc += Math.min(100, now - Net.predLastT); Net.predLastT = now;
+  let n = 0, hit = i.hit;
+  while (Net.predAcc >= step && n < 5) {
+    Net.predAcc -= step;
+    playerStep(Net.pred, { x: i.x, y: i.y, hit }); hit = false; n++;
+  }
+  if (view && view.phase === 'ready' && Net.predPhase !== 'ready') Object.assign(Net.pred, newPlayer(1));
+  Net.predPhase = view ? view.phase : Net.predPhase;
+  if (view && view.p && view.p[1]) {
+    const auth = view.p[1];
+    if (Math.abs(Net.pred.x - auth.x) > 60 || Math.abs(Net.pred.y - auth.y) > 60) {
+      Net.pred.x = auth.x; Net.pred.y = auth.y; Net.pred.state = auth.state; Net.pred.diveDir = auth.diveDir;
+    } else { Net.pred.x += (auth.x - Net.pred.x) * 0.15; Net.pred.y += (auth.y - Net.pred.y) * 0.15; }
+  }
+  if (!view) return view;
+  const p1 = Object.assign({}, view.p[1], { x: Net.pred.x, y: Net.pred.y, state: Net.pred.state, diveDir: Net.pred.diveDir });
+  return Object.assign({}, view, { p: [view.p[0], p1] });
 }
 const INTERP = 100;
 function viewFromSnaps(now) {
@@ -1256,8 +1310,105 @@ function leaveRoom(closedByHost) {
     }
   }
   Object.assign(Net, { role: null, code: null, room: null, snaps: [], names: ['', ''] });
+  closeChat(); CHAT = []; CHAT_UNREAD = 0; CHAT_LAST = 0; paintChatBtn();
   toMenu();
 }
+
+/* ================= 채팅 ================= */
+let CHAT = [], CHAT_OPEN = false, CHAT_UNREAD = 0, CHAT_LAST = 0, CHAT_SENT_AT = 0, CHAT_LAST_TEXT = '';
+const QUICK = ['나이스!', '굿샷! 🏐', '아깝다ㅠㅠ', '한 판 더?', 'ㅋㅋㅋ', '잘한다!', '집중집중'];
+const BAD_WORDS = [
+  "시발", "씨발", "씨팔", "시팔", "ㅅㅂ", "개새끼", "개색기", "새꺄", "병신", "ㅂㅅ", "좆", "좇",
+  "존나", "존내", "걸레", "창녀", "미친놈", "미친년", "지랄", "닥쳐", "꺼져", "뒤져", "죽어라",
+  "한남충", "한녀충", "틀딱", "급식충", "맘충", "fuck", "fucking", "shit", "bitch", "asshole",
+  "bastard", "nigger", "retard"
+];
+const CHAT_MAX = 80, CHAT_COOL = 1200, CHAT_DUP = 15000;
+function squash(t) { return t.replace(/(.)\1{7,}/g, (m, c) => c.repeat(8)); }
+function maskBad(text) {
+  const skip = /[\s.,!?~^*\-_'"]/;
+  let plain = ''; const map = [];
+  for (let i = 0; i < text.length; i++) { if (!skip.test(text[i])) { plain += text[i]; map.push(i); } }
+  const low = plain.toLowerCase(), chars = text.split(''); let hit = false;
+  for (const w0 of BAD_WORDS) {
+    const w = w0.toLowerCase(); if (!w) continue;
+    let from = 0, pos;
+    while ((pos = low.indexOf(w, from)) !== -1) { hit = true; for (let k = 0; k < w.length; k++) chars[map[pos + k]] = '*'; from = pos + w.length; }
+  }
+  return { text: chars.join(''), hit };
+}
+function onlyJamo(t) {
+  const x = t.replace(/\s+/g, '');
+  if (!x || /^[ㅋㅎ]+$/.test(x)) return false;
+  return /^[ㄱ-ㅎ]+$/.test(x);
+}
+function chatTip(m) {
+  document.querySelectorAll('.chat-tip').forEach(t => { t.textContent = m; clearTimeout(t._t); t._t = setTimeout(() => { t.textContent = ''; }, 1800); });
+}
+function startChat() {
+  CHAT = []; CHAT_UNREAD = 0; CHAT_LAST = 0;
+  if (!Net.room) return;
+  netListen(Net.room.child('chat').limitToLast(40), 'value', s => {
+    const v = s.val() || {};
+    const list = Object.entries(v).map(([k, m]) => ({ k, ...m })).sort((a, b) => (a.t || 0) - (b.t || 0) || (a.k < b.k ? -1 : 1));
+    const fresh = list.filter(m => (m.t || 0) > CHAT_LAST && CHAT.every(c => c.k !== m.k));
+    const first = CHAT.length === 0 && CHAT_LAST === 0;
+    CHAT = list; if (list.length) CHAT_LAST = Math.max(CHAT_LAST, ...list.map(m => m.t || 0));
+    if (!first && !CHAT_OPEN) fresh.forEach(m => { if (m.role !== Net.role) CHAT_UNREAD++; });
+    renderChat();
+  });
+}
+function sendChat(text) {
+  text = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!text || !Net.room) return false;
+  if (onlyJamo(text)) { chatTip('초성만으로는 보낼 수 없어요'); return false; }
+  const now = Date.now();
+  if (now - CHAT_SENT_AT < CHAT_COOL) { chatTip('너무 빨라요. 잠시 후에 보내세요'); return false; }
+  text = squash(text).slice(0, CHAT_MAX);
+  const { text: masked, hit } = maskBad(text); text = masked;
+  if (text === CHAT_LAST_TEXT && now - CHAT_SENT_AT < CHAT_DUP) { chatTip('같은 메시지는 잠시 뒤에 보낼 수 있어요'); return false; }
+  CHAT_SENT_AT = now; CHAT_LAST_TEXT = text;
+  if (hit) chatTip('거친 표현은 별표로 가렸어요');
+  const role = Net.role, idx = role === 'host' ? 0 : 1;
+  Net.room.child('chat').push({ role, name: Net.names[idx] || '', skin: Net.skins[idx] | 0, text, t: firebase.database.ServerValue.TIMESTAMP })
+    .catch(() => toast('메시지를 보내지 못했어요'));
+  return true;
+}
+function chatHTML() {
+  if (!CHAT.length) return `<div class="chat-empty">아직 대화가 없어요</div>`;
+  return CHAT.map(m => `<div class="cmsg ${m.role === Net.role ? 'mine' : ''}"><span class="cn"><i style="background:${(SKINS[m.skin] || SKINS[0]).main}"></i>${esc(m.name || '')}</span><span>${esc(maskBad(String(m.text || '')).text)}</span></div>`).join('');
+}
+function renderChat() {
+  const h = chatHTML();
+  document.querySelectorAll('.chatbox').forEach(box => { box.innerHTML = h; box.scrollTop = box.scrollHeight; });
+  paintChatBtn();
+}
+function chatFormHTML() {
+  return `<div class="chat-tip"></div>
+    <form class="chatform" data-chat="1"><input type="text" id="chatInput" maxlength="${CHAT_MAX}" placeholder="메시지" autocomplete="off"><button class="btn gray" type="submit" style="width:auto;padding:9px 16px">보내기</button></form>`;
+}
+function paintChatBtn() {
+  document.querySelectorAll('.cbadge').forEach(b => { b.textContent = CHAT_UNREAD > 9 ? '9+' : CHAT_UNREAD; b.style.display = CHAT_UNREAD ? '' : 'none'; });
+}
+function openChat() {
+  if (!Net.room) return;
+  CHAT_OPEN = true; CHAT_UNREAD = 0;
+  $('#chatSheet').innerHTML = `<div class="chatModal"><div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0;font-size:24px">💬 채팅</h2><button class="btn gray" data-act="closeChat" style="width:auto;padding:6px 14px">닫기</button></div>
+    <div class="chatbox"></div>
+    <div class="quick">${QUICK.map(q => `<button type="button" class="qchip" data-act="quickChat" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+    ${chatFormHTML()}
+  </div></div>`;
+  renderChat();
+  const inp = $('#chatInput'); if (inp) inp.focus();
+}
+function closeChat() { CHAT_OPEN = false; const s = $('#chatSheet'); if (s) s.innerHTML = ''; }
+document.addEventListener('click', e => { if (e.target.id === 'chatSheet' || (e.target.classList && e.target.classList.contains('chatModal'))) closeChat(); });
+document.addEventListener('submit', e => {
+  const f = e.target.closest('form[data-chat]'); if (!f) return;
+  e.preventDefault();
+  const inp = f.querySelector('input'); if (sendChat(inp.value)) inp.value = '';
+});
 
 /* ================= 버튼 ================= */
 const actions = {
@@ -1279,7 +1430,9 @@ const actions = {
     else startGame(mode);
   },
   hud: () => togglePause(true),
-  go: () => closeReady()
+  go: () => closeReady(),
+  openChat, closeChat,
+  quickChat: b => { sendChat(b.dataset.q); }
 };
 document.addEventListener('click', e => {
   const sw = e.target.closest('.sw button');
@@ -1292,7 +1445,7 @@ document.addEventListener('click', e => {
   }
   const b = e.target.closest('[data-act]'); if (!b) return;
   Sound.get(); b.blur();
-  const f = actions[b.dataset.act]; if (f) f();
+  const f = actions[b.dataset.act]; if (f) f(b);
 });
 function updSegs() {
   document.querySelectorAll('.seg').forEach(s => s.querySelectorAll('button').forEach(b =>
