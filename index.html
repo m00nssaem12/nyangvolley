@@ -1218,10 +1218,31 @@ function guestSend(now) {
 const INTERP = 100;
 function viewFromSnaps(now) {
   const sn = Net.snaps; if (!sn.length) return null;
-  const rt = now - INTERP;
+  // 최근 스냅샷 도착 간격/편차를 보고 보간 지연을 자동 조절 (네트워크가 들쭉날쭉해도 안 끊기게)
+  let interp = INTERP;
+  if (sn.length >= 4) {
+    const n = Math.min(8, sn.length - 1);
+    let sum = 0, maxGap = 0;
+    for (let k = sn.length - n; k < sn.length; k++) {
+      const g = sn[k].t - sn[k - 1].t;
+      sum += g; if (g > maxGap) maxGap = g;
+    }
+    const avg = sum / n;
+    interp = clamp(avg * 1.4 + (maxGap - avg) * 0.8, INTERP, 260);
+  }
+  const rt = now - interp;
   let i = sn.length - 1; while (i > 0 && sn[i].t > rt) i--;
   const a = sn[i], b = sn[i + 1];
-  if (!b) return a.s;
+  if (!b) {
+    // 아직 다음 스냅샷이 안 왔으면 화면을 얼리지 말고 최근 속도로 잠깐 추정해서 이어붙임
+    const prev = sn[sn.length - 2];
+    if (prev && a === sn[sn.length - 1]) {
+      const dt = a.t - prev.t;
+      const ahead = clamp((now - a.t) / (dt || 1), 0, 1.5);
+      return lerpView(prev.s, a.s, 1 + ahead);
+    }
+    return a.s;
+  }
   return lerpView(a.s, b.s, clamp((rt - a.t) / ((b.t - a.t) || 1), 0, 1));
 }
 function leaveRoom(closedByHost) {
