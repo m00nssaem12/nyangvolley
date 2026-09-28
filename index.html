@@ -76,6 +76,8 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
 .pad.compact .tb.hit{width:52px;height:52px;font-size:15px}
 .pad.compact{gap:4px}
 @media (max-width:520px){#hud-menu{font-size:12px;padding:2px 8px;top:4px}}
+.seg button{white-space:nowrap}
+@media (max-width:440px){.seg button{font-size:13px;padding:6px 1px}.sw{gap:3px}.sw button{width:23px;height:23px;border-width:2px}.opt{grid-template-columns:auto 1fr;gap:7px 6px}.opt>span{white-space:nowrap;font-size:13px}}
 </style>
 </head>
 <body>
@@ -102,7 +104,7 @@ kbd{display:inline-block;min-width:26px;padding:1px 6px;border-radius:7px;backgr
     <span>왼쪽 색</span><div class="sw" data-side="0"></div>
     <span>오른쪽 색</span><div class="sw" data-side="1"></div>
     <span>컴퓨터</span>
-    <div class="seg" data-set="cpu"><button data-v="easy">쉬움</button><button data-v="normal">보통</button><button data-v="hard">어려움</button></div>
+    <div class="seg" data-set="cpu"><button data-v="veasy">아주 쉬움</button><button data-v="easy">쉬움</button><button data-v="normal">보통</button><button data-v="hard">어려움</button></div>
   </div>
   <div class="row"><button class="btn gray" data-act="help">🎮 조작법</button><button class="btn gray" data-act="sound" id="btn-sound">🔊 소리 켜짐</button></div>
   <div class="foot">made by m00n</div>
@@ -235,6 +237,7 @@ function newGame(winScore, rate) {
 function ballPhys(b) {
   if (b.x + b.xv < B_R || b.x + b.xv > W - B_R) b.xv = -b.xv;       // 옆 벽
   if (b.y + b.yv < 0) b.yv = 1;                                      // 천장
+  netSweep(b);                                                       // 빠른 공이 네트를 건너뛰지 않게
   if (Math.abs(b.x - HALF) < NET_HALF && b.y > NET_TOP) {            // 네트
     if (b.y <= NET_TOP_BOTTOM) { if (b.yv > 0) b.yv = -b.yv; }
     else b.xv = b.x < HALF ? -Math.abs(b.xv) : Math.abs(b.xv);
@@ -249,6 +252,20 @@ function ballPhys(b) {
   } else { b.y = fy; b.yv += 1; }
   b.x = clamp(b.x + b.xv, B_R, W - B_R);
   return grounded;
+}
+// 이번 프레임 이동 경로를 잘게 나눠, 네트 영역에 들어가는 순간을 찾아 튕긴다
+function netSweep(b) {
+  if (Math.abs(b.x - HALF) < NET_HALF && b.y > NET_TOP) return;     // 이미 네트 안: 아래 기본 처리
+  let px = b.x, py = b.y;
+  for (let i = 1; i <= 4; i++) {
+    const x = b.x + b.xv * i / 4, y = b.y + b.yv * i / 4;
+    if (Math.abs(x - HALF) < NET_HALF && y > NET_TOP) {
+      if (py <= NET_TOP) { if (b.yv > 0) b.yv = -b.yv; }            // 위에서 네트 꼭대기에 닿음
+      else b.xv = px < HALF ? -Math.abs(b.xv) : Math.abs(b.xv);     // 옆에서 네트에 닿음
+      return;
+    }
+    px = x; py = y;
+  }
 }
 function ballStep(b) {
   const g = ballPhys(b);
@@ -280,22 +297,42 @@ function playerStep(p, inp) {
   if (p.state === 2 && --p.hitT <= 0) p.state = p.y < P_GROUND ? 1 : 0;
 }
 
+// 프레임 사이 t(0~1) 시점에 공 중심이 판정 상자 안에 있었는지
+function overlapAt(b, p, t) {
+  const bx = b.px + (b.x - b.px) * t, by = b.py + (b.y - b.py) * t;
+  const px = p.px + (p.x - p.px) * t, py = p.py + (p.y - p.py) * t;
+  return Math.abs(bx - px) <= P_HALF && Math.abs(by - py) <= P_HALF ? { bx, by } : null;
+}
 function collide(G, p, b, inp) {
-  if (Math.abs(b.x - p.x) <= P_HALF && Math.abs(b.y - p.y) <= P_HALF) {
-    if (p.colliding) return;
-    p.colliding = true;
-    b.xv = Math.trunc((b.x - p.x) / 3);
-    if (b.xv === 0) b.xv = Math.floor(Math.random() * 3) - 1;
-    b.yv = -Math.max(Math.abs(b.yv), 15);
-    b.power = false;
-    if (p.state === 2) {                      // 강스파이크
-      const dir = p.side === 0 ? 1 : -1;
-      b.xv = dir * (Math.abs(inp.x) + 1) * 10;
-      b.yv = Math.abs(b.yv) * inp.y * 2;   // 원작: 날아온 세로 속도 × 방향 × 2
-      b.power = true;
-      G.fx.power++; G.fx.px = b.x; G.fx.py = b.y;
-    } else G.fx.hit++;
-  } else p.colliding = false;
+  let at = overlapAt(b, p, 1);
+  const inside = !!at;
+  // 빠른 공이 한 프레임 사이에 몸을 건너뛰는 경우(터널링) 방지
+  if (!inside && !p.colliding) for (const t of [0.25, 0.5, 0.75]) { at = overlapAt(b, p, t); if (at) break; }
+  if (!at) { p.colliding = false; return; }
+  // 이미 닿아 있는 중이면, 공이 머리 쪽에서 몸에 다시 파고들 때(떨어지거나, 점프한 머리가 밀어 올릴 때)만 새로 친다
+  if (p.colliding && (b.power || !(b.y < p.y && b.yv > p.yv - 2))) return;
+  p.colliding = true;
+  if (!inside) { b.x = at.bx; b.y = at.by; }
+  b.xv = Math.trunc((b.x - p.x) / 3);
+  if (b.xv === 0) b.xv = Math.floor(Math.random() * 3) - 1;
+  b.yv = -Math.max(Math.abs(b.yv), 15);
+  if (b.yv > p.yv - 8) b.yv = p.yv - 8;       // 점프로 올라가는 몸보다 공이 확실히 빨리 떠나게 (몸에 박힘 방지)
+  const dy = b.y - p.y;
+  if (dy <= 0) b.y = Math.min(b.y, p.y - 22); // 머리에 깊이 박힌 공은 머리 위로 살짝 꺼내기
+  else {                               // 몸 옆·아래쪽에 닿음 → 몸을 뚫고 올라가지 않도록 바깥으로
+    const dx = b.x - p.x, sx = dx !== 0 ? Math.sign(dx) : (p.side === 0 ? 1 : -1);
+    b.x = p.side === 0 ? clamp(p.x + sx * (P_HALF + 2), B_R, HALF - NET_HALF) : clamp(p.x + sx * (P_HALF + 2), HALF + NET_HALF, W - B_R);
+    b.xv = sx * Math.max(Math.abs(b.xv), 8);
+  }
+  b.power = false;
+  if (p.state === 2) {                      // 강스파이크
+    const dir = p.side === 0 ? 1 : -1;
+    if ((b.x - p.x) * dir < 0) b.x = p.side === 0 ? Math.min(p.x + 12, HALF - NET_HALF) : Math.max(p.x - 12, HALF + NET_HALF);   // 몸 뒤의 공은 앞발 쪽에서 출발 (몸 관통 방지)
+    b.xv = dir * (Math.abs(inp.x) + 1) * 10;
+    b.yv = Math.abs(b.yv) * inp.y * 2;   // 원작: 날아온 세로 속도 × 방향 × 2
+    b.power = true;
+    G.fx.power++; G.fx.px = b.x; G.fx.py = b.y;
+  } else G.fx.hit++;
 }
 
 function resetRound(G) {
@@ -349,6 +386,7 @@ function tick(G, inputs) {
 
 /* ================= 컴퓨터 AI ================= */
 const AI_LV = {
+  veasy:  { err: 20, react: 9, jump: 0,    spike: 0,    dive: 0,    aim: 0, miss: 0.35, lazy: 0.3 },
   easy:   { err: 26, react: 6, jump: 0.2,  spike: 0.5,  dive: 0.15, aim: 0.3 },
   normal: { err: 10, react: 3, jump: 0.55, spike: 0.8,  dive: 0.45, aim: 0.75 },
   hard:   { err: 2,  react: 1, jump: 0.9,  spike: 0.95, dive: 0.85, aim: 0.95 }
@@ -386,10 +424,11 @@ function aiInput(ai, G) {
         ai.errSet = true;
         ai.err = (Math.random() * 1.4 - 0.4) * lv.err;
         ai.wantJump = Math.random() < lv.jump;
+        ai.missOff = Math.random() < (lv.miss || 0) ? (Math.random() < 0.5 ? -1 : 1) * 52 : 0;   // 일부러 놓치기
       }
       let off = clamp(3 * (Math.abs(pr.x - HALF) + 40) / 26, 5, 24);
       if (ai.wantJump || Math.abs(pr.x - HALF) < 70) off = 6;
-      ai.target = pr.x - dir * Math.max(3, off + ai.err);
+      ai.target = pr.x - dir * Math.max(3, off + ai.err) + (ai.missOff || 0);
     } else {
       ai.errSet = false;
       ai.target = ai.side === 0 ? 96 : 336;
@@ -397,10 +436,10 @@ function aiInput(ai, G) {
   }
   if (p.y < P_GROUND && mine(b.x)) ai.target = b.x - dir * 8;
   const dx = ai.target - p.x;
-  if (Math.abs(dx) > 3) inp.x = Math.sign(dx);
+  if (Math.abs(dx) > 3 && !(lv.lazy && Math.random() < lv.lazy)) inp.x = Math.sign(dx);
 
   // 점프 (스파이크 노리기)
-  const nearNetBall = ai.pred && mine(ai.pred.x) && Math.abs(ai.pred.x - HALF) < 70;
+  const nearNetBall = lv.jump > 0 && ai.pred && mine(ai.pred.x) && Math.abs(ai.pred.x - HALF) < 70;
   if (p.state === 0 && (ai.wantJump || nearNetBall) && mine(b.x)) {
     for (const t of [6, 8, 10, 12, 14, 16]) {
       const s = simBall(b, t);
