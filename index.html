@@ -426,10 +426,11 @@ function tick(G, inputs) {
 
 /* ================= 컴퓨터 AI ================= */
 const AI_LV = {
-  veasy:  { err: 20, react: 9, jump: 0,    spike: 0,    dive: 0,    aim: 0, miss: 0.35, lazy: 0.3 },
-  easy:   { err: 26, react: 6, jump: 0.2,  spike: 0.5,  dive: 0.15, aim: 0.3 },
-  normal: { err: 10, react: 3, jump: 0.55, spike: 0.8,  dive: 0.45, aim: 0.75 },
-  hard:   { err: 2,  react: 1, jump: 0.9,  spike: 0.95, dive: 0.85, aim: 0.95 }
+  // delay: 공을 몇 프레임 늦게 보는지 (사람 반응 속도 흉내, 25프레임 = 1초)
+  veasy:  { delay: 8, err: 20, react: 9, jump: 0,    spike: 0,    dive: 0,    aim: 0,    miss: 0.35, lazy: 0.3 },
+  easy:   { delay: 7, err: 26, react: 6, jump: 0.15, spike: 0.4,  dive: 0.1,  aim: 0.2,  miss: 0.1 },
+  normal: { delay: 6, err: 16, react: 3, jump: 0.35, spike: 0.6,  dive: 0.3,  aim: 0.4 },
+  hard:   { delay: 4, err: 8,  react: 2, jump: 0.7,  spike: 0.85, dive: 0.6,  aim: 0.7 }
 };
 function makeAI(side, lv) {
   return { side, lv: AI_LV[lv] || AI_LV.normal, cd: 0, target: side === 0 ? 96 : 336,
@@ -449,9 +450,20 @@ function predictBall(b, max) {
   return { x: s.x, t: max };
 }
 function aiInput(ai, G) {
-  const p = G.players[ai.side], b = G.ball, lv = ai.lv, dir = ai.side === 0 ? 1 : -1;
+  const p = G.players[ai.side], lv = ai.lv, dir = ai.side === 0 ? 1 : -1;
   const inp = { x: 0, y: 0, hit: false };
-  if (G.phase !== 'play') { ai.cd = 0; ai.errSet = false; return inp; }
+  if (G.phase !== 'play') { ai.cd = 0; ai.errSet = false; ai.belief = null; return inp; }
+  // 사람처럼: 공이 날아가는 궤적은 보지만, 누가 쳐서 방향이 바뀌면 알아채기까지 시간이 걸린다
+  //  (그동안은 원래 궤적대로 올 거라고 생각하고 움직임. delay = 알아채는 데 걸리는 프레임, 25프레임 = 1초)
+  const gb = G.ball, tc = G.fx.hit + G.fx.power;
+  if (!ai.belief) { ai.belief = { x: gb.x, y: gb.y, xv: gb.xv, yv: gb.yv }; ai.bt = tc; ai.syncIn = 0; }
+  else {
+    ballPhys(ai.belief);
+    if (tc !== ai.bt) { ai.bt = tc; ai.syncIn = (lv.delay || 0) + 1; }
+    if (ai.syncIn > 0 && --ai.syncIn === 0) ai.belief = { x: gb.x, y: gb.y, xv: gb.xv, yv: gb.yv };
+    if (!ai.syncIn && (Math.abs(ai.belief.x - gb.x) > 2 || Math.abs(ai.belief.y - gb.y) > 2)) ai.belief = { x: gb.x, y: gb.y, xv: gb.xv, yv: gb.yv };
+  }
+  const b = ai.belief;
   const mine = x => ai.side === 0 ? x < HALF : x > HALF;
   const touches = G.fx.hit + G.fx.power;
   if (touches !== ai.touches) { ai.touches = touches; ai.errSet = false; ai.cd = Math.min(ai.cd, 1); }
